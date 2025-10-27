@@ -147,7 +147,7 @@ async def check_coin_items(i: discord.Interaction):
     await i.response.send_message(msg, ephemeral=True)
 
 # --- Coin貸し出し ---
-@casino.command(name="2_Coin貸し出し", description="1Coin＝20Gで貸し出します。")
+@casino.command(name="2_coin貸し出し", description="1Coin＝20Gで貸し出します。")
 async def casino_loan(i, coin数: int):
     uid = str(i.user.id)
     ensure_account(uid)
