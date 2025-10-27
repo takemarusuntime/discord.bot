@@ -284,7 +284,7 @@ class SlotView(discord.ui.View):
 
 # --- スロット（💖系1/240・高確率モード＋斜めライン対応／メッセージ統一版） ---
 @casino.command(name="11_スロット", description="3Coinで1回転！BB成立で360枚！")
-async def casino_slot(i: discord.Interaction, from_button: bool = False, original_message: discord.Message = None):
+async def casino_slot(i: discord.Interaction, from_button: bool = False, original_message=None):
     uid = str(i.user.id)
     ensure_account(uid)
     u = balances[uid]
