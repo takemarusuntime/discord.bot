@@ -296,6 +296,65 @@ async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component and interaction.data.get("custom_id") == "slot_retry":
         await casino_slot(interaction, from_button=True)
 
+# --- 12_100面ダイス ---
+@casino.command(name="12_100面ダイス", description="0～100の数字を指定して賭け！最高200倍のCoinを獲得！")
+async def casino_dice(i: discord.Interaction, number: int, bet: int):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    u = balances[uid]
+
+    # --- 入力チェック ---
+    if not (0 <= number <= 100):
+        return await i.response.send_message("⚠️ 0～100の数字を指定してください。", ephemeral=True)
+    if bet <= 0:
+        return await i.response.send_message("⚠️ 1以上のCoinを指定してください。", ephemeral=True)
+    if u["coin"] < bet:
+        return await i.response.send_message("🪙 Coinが不足しています。", ephemeral=True)
+
+    # --- コイン消費 ---
+    u["coin"] -= bet
+
+    # --- ダイスを振る ---
+    dice = random.randint(0, 100)
+    text = f"🎲 ダイスの出目は **{dice}**！\n🎯 {i.user.display_name}の予想: {number}\n"
+    multiplier = 0
+
+    # --- 判定補助 ---
+    def same_decade(num1, num2):
+        """1～10, 11～20, ..., 91～100 のグループで比較"""
+        def group(n): return ((n - 1) // 10) if n > 0 else 0
+        return group(num1) == group(num2)
+
+    # --- ゾロ目判定（11,22,33...100）---
+    is_double = (dice % 11 == 0 and dice != 0)
+
+    # --- 同じ10の位判定 ---
+    same_tens = same_decade(dice, number)
+
+    # --- 結果分岐 ---
+    if dice == number and is_double:
+        multiplier = 200
+        text += f"💥 **当たり＆ゾロ目！200倍の大当たり！！** 💥"
+    elif dice == number:
+        multiplier = 40
+        text += f"🎯 **的中！40倍のCoinを獲得！**"
+    elif is_double:
+        multiplier = 5
+        text += f"✨ ゾロ目ボーナス！5倍のCoinを獲得！"
+    elif same_tens:
+        multiplier = 2
+        text += f"💫 ニアピン！同じ10の位！2倍のCoinを獲得！"
+    else:
+        text += f"😢 ハズレ…また挑戦しよう！"
+
+    # --- 結果反映 ---
+    win = bet * multiplier
+    u["coin"] += win
+    save_data()
+
+    text += f"\n\n🪙 賭け: {bet}枚\n🎁 獲得: {win}枚\n🪙 現在の所持Coin: {u['coin']}枚"
+    await i.response.send_message(text, ephemeral=True)
+
 @bot.event
 async def on_interaction(i):
     if i.type == discord.InteractionType.component and i.data.get("custom_id") == "slot_retry":
