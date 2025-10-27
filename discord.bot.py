@@ -1,6 +1,6 @@
 import discord, json, os, time, asyncio, random
 from discord.ext import commands, tasks
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from keep_alive import keep_alive
 
 # --- Bot設定 ---
@@ -10,7 +10,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- グローバル変数 ---
 balances, voice_times, last_message_time = {}, {}, {}
-BALANCES_FILE, INTEREST_RATE = "balances.json", 0.001
+BALANCES_FILE = "balances.json"
+
+# 💰 年利50% → 日利換算（複利）
+ANNUAL_RATE = 0.5  # 年利50%
+INTEREST_RATE = (1 + ANNUAL_RATE) ** (1 / 365) - 1  # ≒ 0.001118（日利0.1118%）
+JST = timezone(timedelta(hours=9))  # 日本時間設定
 
 # --- データ保存・読み込み ---
 def save_data():
@@ -32,6 +37,62 @@ def load_data():
 def ensure_account(uid):
     if uid not in balances:
         balances[uid] = {"wallet": 0, "bank": 10000, "coin": 0, "last_interest": str(datetime.utcnow().date())}
+
+
+# ==============================
+# 🪙 チャット報酬・VC報酬
+# ==============================
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    uid = str(message.author.id)
+    ensure_account(uid)
+    now = time.time()
+    if uid in last_message_time and (now - last_message_time[uid]) < 5:
+        return await bot.process_commands(message)
+    last_message_time[uid] = now
+    c = len(message.content.strip())
+    if c >= 3:
+        balances[uid]["bank"] += c // 3
+        save_data()
+    await bot.process_commands(message)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    uid = str(member.id)
+    ensure_account(uid)
+    if before.channel is None and after.channel is not None:
+        voice_times[uid] = datetime.utcnow()
+    elif before.channel is not None and after.channel is None and uid in voice_times:
+        mins = int((datetime.utcnow() - voice_times.pop(uid)).total_seconds() // 60)
+        if mins > 0:
+            balances[uid]["bank"] += mins
+            save_data()
+
+
+# ==============================
+# 💰 日本時間0時 利息付与
+# ==============================
+@tasks.loop(minutes=1)
+async def check_interest_time():
+    """毎分チェックして、日本時間0時になったら利息付与"""
+    now = datetime.now(JST)
+    if now.hour == 0 and now.minute == 0:  # 0時ちょうど
+        await apply_interest_once()
+        print("💰 日本時間0時：利息付与完了！")
+
+async def apply_interest_once():
+    today = datetime.utcnow().date()
+    for uid, data in balances.items():
+        ensure_account(uid)
+        last = datetime.strptime(data.get("last_interest", str(today)), "%Y-%m-%d").date()
+        days = (today - last).days
+        if days > 0:
+            for _ in range(days):
+                data["bank"] = round(data["bank"] * (1 + INTEREST_RATE), 2)
+            data["last_interest"] = str(today)
+    save_data()
 
 
 # ==============================
@@ -158,79 +219,40 @@ async def exchange_prizes(interaction: discord.Interaction, coin数: int):
         f"🏆 {interaction.user.display_name} さんが **{coin数} Coin** を景品交換しました！\n"
         f"💵 獲得：{gain}G\n👛 所持金：{balances[uid]['wallet']}G\n🪙 残りCoin：{balances[uid]['coin']}枚", ephemeral=True)
 
-@casino_group.command(name="ダイス", description="1〜100の数字を選んでGを賭け、ダイス勝負！")
+@casino_group.command(name="ダイス", description="1〜100の数字を選んでCoinを賭け、ダイス勝負！")
 async def dice(interaction: discord.Interaction, number: int, bet: int):
     uid = str(interaction.user.id)
     ensure_account(uid)
     if not (1 <= number <= 100):
         return await interaction.response.send_message("🎯 数字は1〜100で指定してください。", ephemeral=True)
     if bet <= 0:
-        return await interaction.response.send_message("💰 賭け金は1G以上にしてください。", ephemeral=True)
-    if balances[uid]["wallet"] < bet:
-        return await interaction.response.send_message("💸 所持金が不足しています。", ephemeral=True)
-    balances[uid]["wallet"] -= bet
+        return await interaction.response.send_message("💰 賭けCoinは1枚以上にしてください。", ephemeral=True)
+    if balances[uid]["coin"] < bet:
+        return await interaction.response.send_message("🪙 Coinが不足しています。", ephemeral=True)
+
+    balances[uid]["coin"] -= bet
     dice = random.randint(1, 100)
     w = 0
+
     if dice == number:
         w = bet * 30
-        balances[uid]["wallet"] += w
-        msg = f"🎯 **的中！** 出目{dice}！💎 賭け金の30倍 **{w}G** 獲得！"
+        balances[uid]["coin"] += w
+        msg = f"🎯 **的中！** 出目{dice}！💎 賭けCoinの30倍 **{w} Coin** 獲得！"
     elif dice % 11 == 0:
         w = bet * 2
-        balances[uid]["wallet"] += w
-        msg = f"🎰 **ゾロ目ボーナス！** 出目{dice}！ 賭け金の2倍 **{w}G** 獲得！"
+        balances[uid]["coin"] += w
+        msg = f"🎰 **ゾロ目ボーナス！** 出目{dice}！ 賭けCoinの2倍 **{w} Coin** 獲得！"
     else:
-        msg = f"🎲 出目{dice}！😢 残念、賭け金 {bet}G は失われました。"
+        msg = f"🎲 出目{dice}！😢 残念、賭けCoin {bet} 枚は失われました。"
+
     save_data()
     await interaction.response.send_message(
-        f"🎲 **{interaction.user.display_name} のダイスチャレンジ！**\n選んだ数字：{number}\n{msg}\n👛 現在の所持金：{balances[uid]['wallet']}G", ephemeral=True)
+        f"🎲 **{interaction.user.display_name} のダイスチャレンジ！**\n"
+        f"選んだ数字：{number}\n{msg}\n🪙 現在の保有Coin：{balances[uid]['coin']}枚",
+        ephemeral=True
+    )
 
 bot.tree.add_command(casino_group)
-
-
-# ==============================
-# 🪙 チャット報酬・VC報酬・利息
-# ==============================
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
-    uid = str(message.author.id)
-    ensure_account(uid)
-    now = time.time()
-    if uid in last_message_time and (now - last_message_time[uid]) < 5:
-        return await bot.process_commands(message)
-    last_message_time[uid] = now
-    c = len(message.content.strip())
-    if c >= 3:
-        balances[uid]["bank"] += c // 3
-        save_data()
-    await bot.process_commands(message)
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    uid = str(member.id)
-    ensure_account(uid)
-    if before.channel is None and after.channel is not None:
-        voice_times[uid] = datetime.utcnow()
-    elif before.channel is not None and after.channel is None and uid in voice_times:
-        mins = int((datetime.utcnow() - voice_times.pop(uid)).total_seconds() // 60)
-        if mins > 0:
-            balances[uid]["bank"] += mins
-            save_data()
-
-@tasks.loop(hours=24)
-async def apply_interest():
-    today = datetime.utcnow().date()
-    for uid, data in balances.items():
-        ensure_account(uid)
-        last = datetime.strptime(data.get("last_interest", str(today)), "%Y-%m-%d").date()
-        days = (today - last).days
-        if days > 0:
-            for _ in range(days):
-                data["bank"] = round(data["bank"] * (1 + INTEREST_RATE), 2)
-            data["last_interest"] = str(today)
-    save_data()
 
 
 # ==============================
@@ -245,8 +267,9 @@ load_data()
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    apply_interest.start()
-    print("✅ コマンドを再同期しました！")
+    check_interest_time.start()
+    print(f"✅ コマンドを再同期しました！（日利{INTEREST_RATE*100:.4f}% / 年利50%）")
+    print("⏰ 日本時間0:00ごとに利息が自動反映されます。")
     print(f"✅ ログインしました: {bot.user}")
 
 keep_alive()
