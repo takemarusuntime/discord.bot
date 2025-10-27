@@ -266,11 +266,11 @@ async def casino_exchange(i: discord.Interaction):
         ephemeral=True
     )
 
-# --- スロット用ボタンビュー（メッセージ統一・安定版） ---
+# --- スロットボタン用ビュー（完全エフェメラル対応） ---
 class SlotView(discord.ui.View):
     def __init__(self, user_id: int):
         super().__init__(timeout=120)
-        self.user_id = user_id  # ボタン押下者を制限
+        self.user_id = user_id
 
     @discord.ui.button(label="もう1回回す", style=discord.ButtonStyle.primary)
     async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -278,13 +278,12 @@ class SlotView(discord.ui.View):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("これは他のユーザーのスロットです！", ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
-        await casino_slot(interaction, from_button=True, original_message=interaction.message)
+        await casino_slot(interaction, from_button=True)
 
 
-# --- スロット（💖系1/240・高確率モード＋斜めライン対応／メッセージ統一版） ---
+# --- スロット（完全エフェメラル版） ---
 @casino.command(name="11_スロット", description="3Coinで1回転！BB成立で360枚！")
-async def casino_slot(i: discord.Interaction, from_button: bool = False, original_message=None):
+async def casino_slot(i: discord.Interaction, from_button: bool = False):
     uid = str(i.user.id)
     ensure_account(uid)
     u = balances[uid]
@@ -292,18 +291,19 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False, origina
     f = u.get("free_spin", False)
     high_mode = u.get("high_mode", False)
 
-    # --- メッセージ確保（1メッセージ方式） ---
-    if from_button and original_message:
-        msg = original_message
+    # --- メッセージ確保（1メッセージ式） ---
+    if from_button:
+        msg_edit = i.response.edit_message  # ボタン経由なら edit で上書き
     else:
         await i.response.send_message("🎰 スロットを起動中…", ephemeral=True)
-        msg = await i.followup.send("🎰 リール回転中…", ephemeral=True)
+        msg = await i.original_response()
+        msg_edit = msg.edit  # 初回送信時
 
     # --- コイン消費 ---
     if f:
         u["free_spin"] = False
     elif u["coin"] < 3:
-        return await msg.edit(content="🪙 Coin不足（3Coin必要）")
+        return await msg_edit(content="🪙 Coin不足（3Coin必要）", view=None)
     else:
         u["coin"] -= 3
 
@@ -313,7 +313,7 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False, origina
     board = [[random.choice(symbols) for _ in range(3)] for _ in range(3)]
     pay, text = 0, ""
 
-    line_type = random.choice([0, 1, 2])   # 0:中央横, 1:↘斜め, 2:↙斜め
+    line_type = random.choice([0, 1, 2])
     def set_line(arr):
         if line_type == 0:
             for c in range(3): board[1][c] = arr[c]
@@ -348,20 +348,20 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False, origina
     # --- 疑似回転アニメ ---
     for _ in range(6):
         frame = "\n".join(" ".join(random.choice(symbols) for _ in range(3)) for _ in range(3))
-        await msg.edit(content=f"🎰 リール回転中…\n{frame}")
+        await msg_edit(content=f"🎰 リール回転中…\n{frame}")
         await asyncio.sleep(0.05)
 
     disp = [[random.choice(symbols) for _ in range(3)] for _ in range(3)]
     for c in range(3):
         for r in range(3): disp[r][c] = board[r][c]
-        await msg.edit(content=f"🎰 リール回転中…\n" + "\n".join(" ".join(x) for x in disp))
+        await msg_edit(content=f"🎰 リール回転中…\n" + "\n".join(" ".join(x) for x in disp))
         await asyncio.sleep(0.25 + c * 0.15)
 
     # --- 結果表示 ---
     final_txt = "\n".join(" ".join(r) for r in board)
     view = SlotView(i.user.id)
     mode_status = "（🎯BONUS高確率ゾーン中）" if u.get("high_mode", False) else ""
-    await msg.edit(
+    await msg_edit(
         content=(
             f"🎰 **{i.user.display_name} のスロット結果！**{mode_status}\n"
             f"{final_txt}\n{text}\n🪙 現在：{u['coin']}枚"
