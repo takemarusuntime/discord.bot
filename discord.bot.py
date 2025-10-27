@@ -1,6 +1,7 @@
 import discord, json, os, time, asyncio, random
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, timezone
+from datetime import time as dtime  # JST 0:00 実行用
 from keep_alive import keep_alive
 
 # === Bot設定 ===
@@ -11,6 +12,9 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 balances, voice_times, last_message_time = {}, {}, {}
+# チャット3文字ごとの端数を保持（ユーザーごと）
+char_progress = {}
+
 BALANCES_FILE = "balances.json"
 INTEREST_RATE = (1.5 ** (1 / 365)) - 1  # 年利50%を日利換算
 
@@ -40,21 +44,64 @@ def ensure_account(uid):
             "coin": 0,
             "last_interest": str(datetime.utcnow().date()),
             "items": {"large": 0, "medium": 0, "small": 0},
-            "high_mode": False  # ← 追加済み
+            "high_mode": False  # スロットの高確率モード
         }
 
-# === 利息 ===
-@tasks.loop(hours=24)
+# === チャット報酬（3文字ごとに1G。空白は除外） ===
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    uid = str(message.author.id)
+    ensure_account(uid)
+
+    # 全種類の空白を除去して文字数をカウント
+    non_ws_len = len("".join(message.content.split()))
+    if non_ws_len > 0:
+        acc = char_progress.get(uid, 0) + non_ws_len
+        gained = acc // 3           # 3文字ごとに1G
+        char_progress[uid] = acc % 3
+        if gained > 0:
+            balances[uid]["wallet"] += gained
+            save_data()
+
+    await bot.process_commands(message)
+
+# === VC滞在報酬（1分ごとに在室メンバーへ1G。AFKは除外） ===
+@tasks.loop(minutes=1)
+async def reward_voice_minutes():
+    total_awards = 0
+    for guild in bot.guilds:
+        afk = guild.afk_channel
+        for vc in guild.voice_channels:
+            if afk and vc.id == afk.id:
+                continue  # AFKチャンネルは対象外
+            for member in vc.members:
+                if member.bot:
+                    continue
+                uid = str(member.id)
+                ensure_account(uid)
+                balances[uid]["wallet"] += 1
+                total_awards += 1
+    if total_awards:
+        save_data()
+
+# === 利息（JST 0:00に厳密実行） ===
+# discord.ext.tasks.loop の time= を使い、JSTの0時に起動する
+JST = timezone(timedelta(hours=9))
+
+@tasks.loop(time=dtime(hour=0, minute=0, second=0, tzinfo=JST))
 async def apply_interest():
-    jst = timezone(timedelta(hours=9))
-    today = datetime.now(jst).date()
+    today = datetime.now(JST).date()
     for uid, data in balances.items():
         ensure_account(uid)
         last = datetime.strptime(data.get("last_interest", str(today)), "%Y-%m-%d").date()
         days = (today - last).days
-        for _ in range(days):
-            data["bank"] = round(data["bank"] * (1 + INTEREST_RATE), 2)
-        data["last_interest"] = str(today)
+        if days > 0:
+            for _ in range(days):
+                data["bank"] = round(data["bank"] * (1 + INTEREST_RATE), 2)
+            data["last_interest"] = str(today)
     save_data()
     print(f"💰 {today} 利息反映（日利 {INTEREST_RATE * 100:.4f}%）")
 
@@ -216,11 +263,9 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False):
 
     # 1) 応答の確定
     if from_button:
-        # ボタンはまず defer（3秒内に応答を確定）
         await i.response.defer(ephemeral=True)
         msg = await i.followup.send("🎰 リール回転中…", ephemeral=True)
     else:
-        # スラッシュは通常の send → followup
         await i.response.send_message("🎰 スロットを起動中…", ephemeral=True)
         msg = await i.followup.send("🎰 リール回転中…", ephemeral=True)
 
@@ -266,7 +311,7 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False):
             set_line(["🍇","🍇","🍇"]); pay, text = 8, "+8枚"
         elif roll <= 360:
             set_line(["🔵","🔵","🔵"]); u["free_spin"], text = True, "FREE SPIN!"
-        # else: はずれ（board のランダムをそのまま）
+        # else: はずれ
 
     u["coin"] += pay
     save_data()
@@ -290,10 +335,11 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False):
     mode_status = "（🎯BONUS高確率ゾーン中）" if u.get("high_mode", False) else ""
     await msg.edit(content=f"🎰 **{i.user.display_name} のスロット結果！**{mode_status}\n{final_txt}\n{text}\n🪙 現在：{u['coin']}枚", view=view)
 
-# ボタンの応答は defer してから from_button=True で再スピン
+# --- スロット再スピンボタン用（※重複定義なし） ---
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component and interaction.data.get("custom_id") == "slot_retry":
+        # deferしてからボタン経由のスピンを実行
         await casino_slot(interaction, from_button=True)
 
 # --- 12_100面ダイス ---
@@ -303,7 +349,7 @@ async def casino_dice(i: discord.Interaction, number: int, bet: int):
     ensure_account(uid)
     u = balances[uid]
 
-    # --- 入力チェック ---
+    # 入力チェック
     if not (0 <= number <= 100):
         return await i.response.send_message("⚠️ 0～100の数字を指定してください。", ephemeral=True)
     if bet <= 0:
@@ -311,27 +357,21 @@ async def casino_dice(i: discord.Interaction, number: int, bet: int):
     if u["coin"] < bet:
         return await i.response.send_message("🪙 Coinが不足しています。", ephemeral=True)
 
-    # --- コイン消費 ---
+    # コイン消費
     u["coin"] -= bet
 
-    # --- ダイスを振る ---
+    # ダイス
     dice = random.randint(0, 100)
     text = f"🎲 ダイスの出目は **{dice}**！\n🎯 {i.user.display_name}の予想: {number}\n"
     multiplier = 0
 
-    # --- 判定補助 ---
     def same_decade(num1, num2):
-        """1～10, 11～20, ..., 91～100 のグループで比較"""
         def group(n): return ((n - 1) // 10) if n > 0 else 0
         return group(num1) == group(num2)
 
-    # --- ゾロ目判定（11,22,33...100）---
     is_double = (dice % 11 == 0 and dice != 0)
-
-    # --- 同じ10の位判定 ---
     same_tens = same_decade(dice, number)
 
-    # --- 結果分岐 ---
     if dice == number and is_double:
         multiplier = 200
         text += f"💥 **当たり＆ゾロ目！200倍の大当たり！！** 💥"
@@ -347,7 +387,6 @@ async def casino_dice(i: discord.Interaction, number: int, bet: int):
     else:
         text += f"😢 ハズレ…また挑戦しよう！"
 
-    # --- 結果反映 ---
     win = bet * multiplier
     u["coin"] += win
     save_data()
@@ -355,14 +394,9 @@ async def casino_dice(i: discord.Interaction, number: int, bet: int):
     text += f"\n\n🪙 賭け: {bet}枚\n🎁 獲得: {win}枚\n🪙 現在の所持Coin: {u['coin']}枚"
     await i.response.send_message(text, ephemeral=True)
 
-@bot.event
-async def on_interaction(i):
-    if i.type == discord.InteractionType.component and i.data.get("custom_id") == "slot_retry":
-        await casino_slot(i)
-
 bot.tree.add_command(casino)
 
-# === 起動 ===
+# === 起動／終了時 ===
 @bot.event
 async def on_disconnect():
     save_data()
@@ -373,7 +407,9 @@ load_data()
 async def on_ready():
     await bot.tree.sync()
     if not apply_interest.is_running():
-        apply_interest.start()
+        apply_interest.start()  # JST 0:00 に走る設定
+    if not reward_voice_minutes.is_running():
+        reward_voice_minutes.start()
     print("✅ コマンドを再同期しました！")
     print(f"✅ ログインしました: {bot.user}")
 
