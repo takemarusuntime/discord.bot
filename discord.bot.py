@@ -342,7 +342,7 @@ async def run_slot(i: discord.Interaction, msg: discord.Message):
     save_data()
 
     # --- 疑似回転アニメ ---
-    for _ in range(6):
+    for _ in range(3):
         frame = "\n".join(" ".join(random.choice(symbols) for _ in range(3)) for _ in range(3))
         await msg.edit(content=f"🎰 リール回転中…\n{frame}")
         await asyncio.sleep(0.05)
