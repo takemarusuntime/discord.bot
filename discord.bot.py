@@ -172,6 +172,100 @@ bot.tree.add_command(bank)
 # === カジノ機能群 ===
 casino = discord.app_commands.Group(name="2-casino", description="カジノ関連のコマンドです")
 
+# --- 所持Coin＆景品数確認 ---
+@casino.command(name="1_所持coin_景品数確認", description="現在の所持Coinと景品数を確認します")
+async def check_coin_items(i: discord.Interaction):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    u = balances[uid]
+    items = u["items"]
+    msg = (
+        f"🎰 **{i.user.display_name} の所持状況**\n"
+        f"🪙 Coin：{u['coin']}枚\n\n"
+        f"🎁 景品：💴{items['large']} 💵{items['medium']} 💶{items['small']}"
+    )
+    await i.response.send_message(msg, ephemeral=True)
+
+
+# --- Coin貸し出し ---
+@casino.command(name="2_coin貸し出し", description="1Coin＝20Gで貸し出します。")
+async def casino_loan(i: discord.Interaction, coin数: int):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    cost = coin数 * 20
+    if coin数 <= 0 or balances[uid]["wallet"] < cost:
+        return await i.response.send_message("👛 G不足", ephemeral=True)
+    balances[uid]["wallet"] -= cost
+    balances[uid]["coin"] += coin数
+    save_data()
+    await i.response.send_message(f"🪙 {coin数}Coin 貸出 (-{cost}G)", ephemeral=True)
+
+
+# --- カウンター ---
+@casino.command(name="3_カウンター", description="Coinを景品に交換（💴275Coin/💵55Coin/💶11Coin）")
+async def casino_counter(i: discord.Interaction, coin数: int):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    u = balances[uid]
+
+    # 入力チェック
+    if coin数 < 11:
+        return await i.response.send_message("⚠️ 11Coin以上から交換可能です", ephemeral=True)
+    if u["coin"] < coin数:
+        return await i.response.send_message("🪙 Coin不足", ephemeral=True)
+
+    # 交換処理
+    L, rem = coin数 // 275, coin数 % 275
+    M, rem = rem // 55, rem % 55
+    S, rem = rem // 11, rem % 11
+    used = L * 275 + M * 55 + S * 11
+
+    u["coin"] -= used
+    u["items"]["large"] += L
+    u["items"]["medium"] += M
+    u["items"]["small"] += S
+    if rem > 0:
+        u["coin"] += rem
+
+    save_data()
+
+    txt = [f"💴×{L}" if L else "", f"💵×{M}" if M else "", f"💶×{S}" if S else ""]
+    txt = " ".join(t for t in txt if t)
+    await i.response.send_message(f"🎁 交換結果：{txt}\n🪙 使用:{used} 残:{u['coin']}枚", ephemeral=True)
+
+
+# --- 景品交換所 ---
+@casino.command(name="4_景品交換所", description="景品をGで買い取り！（💴5000G/💵1000G/💶200G）")
+async def casino_exchange(i: discord.Interaction):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    u = balances[uid]
+
+    L, M, S = u["items"]["large"], u["items"]["medium"], u["items"]["small"]
+    if L + M + S == 0:
+        return await i.response.send_message("🎁 景品がありません。", ephemeral=True)
+
+    L_t, M_t, S_t = L * 5000, M * 1000, S * 200
+    total = L_t + M_t + S_t
+    u["wallet"] += total
+    u["items"] = {"large": 0, "medium": 0, "small": 0}
+
+    save_data()
+
+    det = []
+    if L:
+        det.append(f"💴×{L} → {L_t}G")
+    if M:
+        det.append(f"💵×{M} → {M_t}G")
+    if S:
+        det.append(f"💶×{S} → {S_t}G")
+
+    await i.response.send_message(
+        f"💱 交換結果：\n" + "\n".join(det) +
+        f"\n💰 合計 {total}G 加算！\n👛 現在:{u['wallet']}G",
+        ephemeral=True
+    )
+
 # --- スロットボタン用ビュー（安定版） ---
 class SlotView(discord.ui.View):
     def __init__(self):
