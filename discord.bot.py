@@ -65,9 +65,16 @@ async def omikuji(i):
 
 # === bankグループ ===
 bank=discord.app_commands.Group(name="bank",description="銀行関連")
-@bank.command(name="残高確認",description="残高を確認します")
-async def bal(i):uid=str(i.user.id);ensure_account(uid);w,b=balances[uid]["wallet"],balances[uid]["bank"]
-await i.response.send_message(f"👛{i.user.display_name}の残高\n所持:{w}G 預金:{b}G",ephemeral=True)
+
+# --- 残高確認 ---
+@bank.command(name="残高確認", description="残高を確認します")
+async def bal(i):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    w, b = balances[uid]["wallet"], balances[uid]["bank"]
+    await i.response.send_message(f"👛{i.user.display_name}の残高\n所持:{w}G 預金:{b}G", ephemeral=True)
+
+# --- 送金 ---
 @bank.command(name="送金",description="他人に送金")
 async def pay(i,user:discord.User,amt:int):
     s,r=str(i.user.id),str(user.id);ensure_account(s);ensure_account(r)
@@ -76,12 +83,16 @@ async def pay(i,user:discord.User,amt:int):
     if balances[s]["wallet"]<amt:return await i.response.send_message("💸不足",ephemeral=True)
     balances[s]["wallet"]-=amt;balances[r]["wallet"]+=amt;save_data()
     await i.response.send_message(f"{i.user.mention}➡{user.mention}に{amt}G送金",ephemeral=True)
+
+# --- 預け入れ ---
 @bank.command(name="預け入れ",description="銀行に預けます")
 async def dep(i,amt:int):
     uid=str(i.user.id);ensure_account(uid)
     if amt<=0 or balances[uid]["wallet"]<amt:return await i.response.send_message("⚠️残高不足",ephemeral=True)
     balances[uid]["wallet"]-=amt;balances[uid]["bank"]+=amt;save_data()
     await i.response.send_message(f"🏦{amt}G預入\n👛{balances[uid]['wallet']}G/💰{balances[uid]['bank']}G",ephemeral=True)
+
+# --- 引き出し ---
 @bank.command(name="引き出し",description="銀行から引き出します")
 async def wd(i,amt:int):
     uid=str(i.user.id);ensure_account(uid)
