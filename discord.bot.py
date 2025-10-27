@@ -270,18 +270,18 @@ async def casino_exchange(i: discord.Interaction):
 class SlotView(discord.ui.View):
     def __init__(self, user_id: int):
         super().__init__(timeout=120)
-        self.user_id = user_id
+        self.user_id = user_id  # 押下者制限
 
     @discord.ui.button(label="もう1回回す", style=discord.ButtonStyle.primary)
     async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 他の人が押した場合は無視
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("これは他のユーザーのスロットです！", ephemeral=True)
 
+        # 押した本人のみ、スロット再抽選
         await casino_slot(interaction, from_button=True)
 
 
-# --- スロット（完全エフェメラル版） ---
+# --- スロット（完全エフェメラル・Render安定対応） ---
 @casino.command(name="11_スロット", description="3Coinで1回転！BB成立で360枚！")
 async def casino_slot(i: discord.Interaction, from_button: bool = False):
     uid = str(i.user.id)
@@ -291,82 +291,102 @@ async def casino_slot(i: discord.Interaction, from_button: bool = False):
     f = u.get("free_spin", False)
     high_mode = u.get("high_mode", False)
 
-    # --- メッセージ確保（1メッセージ式） ---
+    # --- メッセージ確保（1メッセージで完結） ---
     if from_button:
-        msg_edit = i.response.edit_message  # ボタン経由なら edit で上書き
+        # ボタンからの再抽選時
+        msg = await i.original_response()
     else:
         await i.response.send_message("🎰 スロットを起動中…", ephemeral=True)
         msg = await i.original_response()
-        msg_edit = msg.edit  # 初回送信時
 
     # --- コイン消費 ---
     if f:
         u["free_spin"] = False
     elif u["coin"] < 3:
-        return await msg_edit(content="🪙 Coin不足（3Coin必要）", view=None)
+        return await msg.edit(content="🪙 Coin不足（3Coin必要）", view=None)
     else:
         u["coin"] -= 3
 
-    # --- 抽選処理 ---
+    # --- 抽選 ---
     symbols = ["🔔", "🍇", "🔵", "🍒", "🤡", "💖", "💷"]
     roll = random.randint(1, 1000)
     board = [[random.choice(symbols) for _ in range(3)] for _ in range(3)]
     pay, text = 0, ""
 
-    line_type = random.choice([0, 1, 2])
+    line_type = random.choice([0, 1, 2])  # 0:中央横, 1:↘斜め, 2:↙斜め
+
     def set_line(arr):
         if line_type == 0:
-            for c in range(3): board[1][c] = arr[c]
+            for c in range(3):
+                board[1][c] = arr[c]
         elif line_type == 1:
-            for n in range(3): board[n][n] = arr[n]
+            for n in range(3):
+                board[n][n] = arr[n]
         else:
-            for n in range(3): board[n][2-n] = arr[n]
+            for n in range(3):
+                board[n][2 - n] = arr[n]
 
     if b > 0:
-        set_line(["🔔","🔔","🔔"]); pay, text = 15, "+15枚"; u["bonus_spins"] -= 1
+        set_line(["🔔", "🔔", "🔔"])
+        pay, text = 15, "+15枚"
+        u["bonus_spins"] -= 1
     else:
         if roll <= 1:
-            set_line(["🤡","🤡","🤡"]); pay, text = 10, "+10枚 🎯 BONUS高確率ゾーン突入！"; u["high_mode"] = True
+            set_line(["🤡", "🤡", "🤡"])
+            pay, text = 10, "+10枚 🎯 BONUS高確率ゾーン突入！"
+            u["high_mode"] = True
         elif high_mode and roll <= 17:
-            set_line(["💖","💖","💖"]); pay, u["bonus_spins"], text = 3, 30, "BIG BONUS!!"; u["high_mode"] = False
+            set_line(["💖", "💖", "💖"])
+            pay, u["bonus_spins"], text = 3, 30, "BIG BONUS!!"
+            u["high_mode"] = False
         elif high_mode and roll <= 34:
-            set_line(["💖","💖","💷"]); pay, u["bonus_spins"], text = 3, 15, "REGULAR BONUS!!"; u["high_mode"] = False
+            set_line(["💖", "💖", "💷"])
+            pay, u["bonus_spins"], text = 3, 15, "REGULAR BONUS!!"
+            u["high_mode"] = False
         elif roll <= 5:
-            set_line(["💖","💖","💖"]); pay, u["bonus_spins"], text = 3, 30, "BIG BONUS!!"
+            set_line(["💖", "💖", "💖"])
+            pay, u["bonus_spins"], text = 3, 30, "BIG BONUS!!"
         elif roll <= 9:
-            set_line(["💖","💖","💷"]); pay, u["bonus_spins"], text = 3, 15, "REGULAR BONUS!!"
+            set_line(["💖", "💖", "💷"])
+            pay, u["bonus_spins"], text = 3, 15, "REGULAR BONUS!!"
         elif roll <= 50:
-            set_line(["🔔","🔔","🔔"]); pay, text = 15, "+15枚"
+            set_line(["🔔", "🔔", "🔔"])
+            pay, text = 15, "+15枚"
         elif roll <= 217:
-            set_line(["🍇","🍇","🍇"]); pay, text = 8, "+8枚"
+            set_line(["🍇", "🍇", "🍇"])
+            pay, text = 8, "+8枚"
         elif roll <= 360:
-            set_line(["🔵","🔵","🔵"]); u["free_spin"], text = True, "FREE SPIN!"
+            set_line(["🔵", "🔵", "🔵"])
+            u["free_spin"], text = True, "FREE SPIN!"
 
     u["coin"] += pay
     save_data()
 
-    # --- 疑似回転アニメ ---
+    # --- 疑似回転演出 ---
     for _ in range(6):
-        frame = "\n".join(" ".join(random.choice(symbols) for _ in range(3)) for _ in range(3))
-        await msg_edit(content=f"🎰 リール回転中…\n{frame}")
+        frame = "\n".join(
+            " ".join(random.choice(symbols) for _ in range(3)) for _ in range(3)
+        )
+        await msg.edit(content=f"🎰 リール回転中…\n{frame}")
         await asyncio.sleep(0.05)
 
     disp = [[random.choice(symbols) for _ in range(3)] for _ in range(3)]
     for c in range(3):
-        for r in range(3): disp[r][c] = board[r][c]
-        await msg_edit(content=f"🎰 リール回転中…\n" + "\n".join(" ".join(x) for x in disp))
+        for r in range(3):
+            disp[r][c] = board[r][c]
+        await msg.edit(content=f"🎰 リール回転中…\n" + "\n".join(" ".join(x) for x in disp))
         await asyncio.sleep(0.25 + c * 0.15)
 
     # --- 結果表示 ---
     final_txt = "\n".join(" ".join(r) for r in board)
     view = SlotView(i.user.id)
     mode_status = "（🎯BONUS高確率ゾーン中）" if u.get("high_mode", False) else ""
-    await msg_edit(
+    await msg.edit(
         content=(
             f"🎰 **{i.user.display_name} のスロット結果！**{mode_status}\n"
             f"{final_txt}\n{text}\n🪙 現在：{u['coin']}枚"
         ),
-        view=view
+        view=view,
     )
 
 # --- 12_100面ダイス ---
