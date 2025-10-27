@@ -15,28 +15,17 @@ balances = {}  # 各ユーザーの所持金と預金残高を管理
 # --- JSONファイル ---
 BALANCES_FILE = "balances.json"
 
-
-# --- データ保存（安全版） ---
-def save_data():
-    """balances.json の安全保存（破損防止）"""
-    temp_file = BALANCES_FILE + ".tmp"
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(balances, f, ensure_ascii=False, indent=4)
-    os.replace(temp_file, BALANCES_FILE)
-
-
-# --- データ読み込み（例外処理付き） ---
+# --- データ読み込み ---
 def load_data():
-    """balances.json の読み込み（破損時は初期化）"""
     global balances
     if os.path.exists(BALANCES_FILE):
-        try:
-            with open(BALANCES_FILE, "r", encoding="utf-8") as f:
-                balances.update(json.load(f))
-        except json.JSONDecodeError:
-            print("⚠️ balances.json が壊れています。新しく作り直します。")
-            balances.clear()
+        with open(BALANCES_FILE, "r", encoding="utf-8") as f:
+            balances.update(json.load(f))
 
+# --- データ保存 ---
+def save_data():
+    with open(BALANCES_FILE, "w", encoding="utf-8") as f:
+        json.dump(balances, f, ensure_ascii=False, indent=4)
 
 # --- ユーザーデータ初期化 ---
 def ensure_account(user_id):
@@ -143,15 +132,8 @@ async def pay(interaction: discord.Interaction, user: discord.User, amount: int)
     )
 
 
-# --- Bot切断時にデータ保存（保険） ---
-@bot.event
-async def on_disconnect():
-    save_data()
-
-
 # --- データ読み込み ---
 load_data()
-
 
 # --- 起動時ログ ---
 @bot.event
