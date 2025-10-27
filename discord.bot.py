@@ -39,36 +39,11 @@ def ensure_account(uid):
             "bank": 10000,
             "coin": 0,
             "last_interest": str(datetime.utcnow().date()),
-            "items": {"large": 0, "medium": 0, "small": 0}
+            "items": {"large": 0, "medium": 0, "small": 0},
+            "high_mode": False  # ← 追加済み
         }
 
-# === 報酬・利息 ===
-@bot.event
-async def on_message(m):
-    if m.author.bot:
-        return
-    uid = str(m.author.id)
-    ensure_account(uid)
-    if uid in last_message_time and time.time() - last_message_time[uid] < 5:
-        return await bot.process_commands(m)
-    last_message_time[uid] = time.time()
-    if len(m.content.strip()) >= 3:
-        balances[uid]["bank"] += len(m.content) // 3
-        save_data()
-    await bot.process_commands(m)
-
-@bot.event
-async def on_voice_state_update(mem, before, after):
-    uid = str(mem.id)
-    ensure_account(uid)
-    if before.channel is None and after.channel:
-        voice_times[uid] = datetime.utcnow()
-    elif before.channel and not after.channel and uid in voice_times:
-        mins = int((datetime.utcnow() - voice_times.pop(uid)).total_seconds() // 60)
-        if mins > 0:
-            balances[uid]["bank"] += mins
-            save_data()
-
+# === 利息 ===
 @tasks.loop(hours=24)
 async def apply_interest():
     jst = timezone(timedelta(hours=9))
@@ -104,18 +79,18 @@ async def omikuji(i):
         ephemeral=True
     )
 
-# === bankグループ ===
-bank = discord.app_commands.Group(name="bank", description="銀行関連")
+# === 銀行グループ ===
+bank = discord.app_commands.Group(name="銀行", description="銀行関連のコマンドです")
 
-@bank.command(name="残高確認", description="残高を確認します")
-async def bal(i):
+@bank.command(name="1_残高確認", description="自分のG残高を確認します。")
+async def bank_bal(i):
     uid = str(i.user.id)
     ensure_account(uid)
     w, b = balances[uid]["wallet"], balances[uid]["bank"]
     await i.response.send_message(f"👛 {i.user.display_name}の残高\n所持:{w}G 預金:{b}G", ephemeral=True)
 
-@bank.command(name="送金", description="他人に送金")
-async def pay(i, user: discord.User, amt: int):
+@bank.command(name="2_送金", description="他のユーザーにGを送金します。")
+async def bank_pay(i, user: discord.User, amt: int):
     s, r = str(i.user.id), str(user.id)
     ensure_account(s)
     ensure_account(r)
@@ -124,14 +99,14 @@ async def pay(i, user: discord.User, amt: int):
     if s == r:
         return await i.response.send_message("🤔 自分に送金不可", ephemeral=True)
     if balances[s]["wallet"] < amt:
-        return await i.response.send_message("💸 残高不足", ephemeral=True)
+        return await i.response.send_message("👛 残高不足", ephemeral=True)
     balances[s]["wallet"] -= amt
     balances[r]["wallet"] += amt
     save_data()
     await i.response.send_message(f"{i.user.mention} ➡ {user.mention} に {amt}G 送金", ephemeral=True)
 
-@bank.command(name="預け入れ", description="銀行に預けます")
-async def dep(i, amt: int):
+@bank.command(name="3_預け入れ", description="所持Gを銀行に預けます。")
+async def bank_dep(i, amt: int):
     uid = str(i.user.id)
     ensure_account(uid)
     if amt <= 0 or balances[uid]["wallet"] < amt:
@@ -139,10 +114,10 @@ async def dep(i, amt: int):
     balances[uid]["wallet"] -= amt
     balances[uid]["bank"] += amt
     save_data()
-    await i.response.send_message(f"🏦 {amt}G 預け入れました\n👛 {balances[uid]['wallet']}G / 💰 {balances[uid]['bank']}G", ephemeral=True)
+    await i.response.send_message(f"💰 {amt}G 預け入れました。\n👛 {balances[uid]['wallet']}G / 🏦 {balances[uid]['bank']}G", ephemeral=True)
 
-@bank.command(name="引き出し", description="銀行から引き出します")
-async def wd(i, amt: int):
+@bank.command(name="4_引き出し", description="銀行からGを引き出します。")
+async def bank_wd(i, amt: int):
     uid = str(i.user.id)
     ensure_account(uid)
     if amt <= 0 or balances[uid]["bank"] < amt:
@@ -150,29 +125,43 @@ async def wd(i, amt: int):
     balances[uid]["bank"] -= amt
     balances[uid]["wallet"] += amt
     save_data()
-    await i.response.send_message(f"💵 {amt}G 引き出し\n👛 {balances[uid]['wallet']}G / 💰 {balances[uid]['bank']}G", ephemeral=True)
+    await i.response.send_message(f"💰 {amt}G 引き出し\n👛 {balances[uid]['wallet']}G / 🏦 {balances[uid]['bank']}G", ephemeral=True)
 
 bot.tree.add_command(bank)
 
-# === casinoグループ ===
-casino = discord.app_commands.Group(name="casino", description="カジノ")
+# === カジノグループ ===
+casino = discord.app_commands.Group(name="casino", description="カジノ関連のコマンドです")
+
+# --- 所持Coin＆景品数確認 ---
+@casino.command(name="1_所持coin_景品数確認", description="現在の所持Coinと景品数を確認します")
+async def check_coin_items(i: discord.Interaction):
+    uid = str(i.user.id)
+    ensure_account(uid)
+    u = balances[uid]
+    items = u["items"]
+    msg = (
+        f"🎰 **{i.user.display_name} の所持状況**\n"
+        f"🪙 Coin：{u['coin']}枚\n\n"
+        f"🎁 景品：💴{items['large']} 💵{items['medium']} 💶{items['small']}"
+    )
+    await i.response.send_message(msg, ephemeral=True)
 
 # --- Coin貸し出し ---
-@casino.command(name="coin貸し出し", description="20Gで1Coinを購入")
-async def loan(i, coin数: int):
+@casino.command(name="2_Coin貸し出し", description="1Coin＝20Gで貸し出します。")
+async def casino_loan(i, coin数: int):
     uid = str(i.user.id)
     ensure_account(uid)
     cost = coin数 * 20
     if coin数 <= 0 or balances[uid]["wallet"] < cost:
-        return await i.response.send_message("💸 G不足", ephemeral=True)
+        return await i.response.send_message("👛 G不足", ephemeral=True)
     balances[uid]["wallet"] -= cost
     balances[uid]["coin"] += coin数
     save_data()
-    await i.response.send_message(f"🎟️ {coin数}Coin 貸出 (-{cost}G)", ephemeral=True)
+    await i.response.send_message(f"🪙 {coin数}Coin 貸出 (-{cost}G)", ephemeral=True)
 
 # --- カウンター ---
-@casino.command(name="カウンター", description="Coinを景品に交換（💴275/💵55/💶11）")
-async def counter(i, coin数: int):
+@casino.command(name="3_カウンター", description="Coinを景品に交換（💴275Coin/💵55Coin/💶11Coin）")
+async def casino_counter(i, coin数: int):
     uid = str(i.user.id)
     ensure_account(uid)
     u = balances[uid]
@@ -188,59 +177,60 @@ async def counter(i, coin数: int):
     u["items"]["large"] += L
     u["items"]["medium"] += M
     u["items"]["small"] += S
-    txt = []
-    if L: txt.append(f"💴 大景品×{L}")
-    if M: txt.append(f"💵 中景品×{M}")
-    if S: txt.append(f"💶 小景品×{S}")
-    refund = f"\n🔁 余りCoin({rem})返却しました" if rem > 0 else ""
     if rem > 0: u["coin"] += rem
     save_data()
-    await i.response.send_message(f"🎁 **{i.user.display_name}のカウンター交換結果**\n" + "\n".join(txt) +
-                                  f"\n🪙 使用:{used}枚 残:{u['coin']}枚{refund}", ephemeral=True)
+    txt = [f"💴×{L}" if L else "", f"💵×{M}" if M else "", f"💶×{S}" if S else ""]
+    txt = " ".join(t for t in txt if t)
+    await i.response.send_message(f"🎁 交換結果：{txt}\n🪙 使用:{used} 残:{u['coin']}枚", ephemeral=True)
 
 # --- 景品交換所 ---
-@casino.command(name="景品交換所", description="所持している景品をGに交換します（💴5000/💵1000/💶200）")
-async def exchange_items(i):
+@casino.command(name="4_景品交換所", description="景品をGで買い取り！（💴5000G/💵1000G/💶200G）")
+async def casino_exchange(i):
     uid = str(i.user.id)
     ensure_account(uid)
     u = balances[uid]
-    items = u["items"]
-    L, M, S = items["large"], items["medium"], items["small"]
+    L, M, S = u["items"]["large"], u["items"]["medium"], u["items"]["small"]
     if L + M + S == 0:
-        return await i.response.send_message("🎁 交換できる景品を持っていません。", ephemeral=True)
+        return await i.response.send_message("🎁 景品がありません。", ephemeral=True)
     L_t, M_t, S_t = L * 5000, M * 1000, S * 200
     total = L_t + M_t + S_t
     u["wallet"] += total
     u["items"] = {"large": 0, "medium": 0, "small": 0}
     save_data()
     det = []
-    if L: det.append(f"💴 大景品×{L} → {L_t}G")
-    if M: det.append(f"💵 中景品×{M} → {M_t}G")
-    if S: det.append(f"💶 小景品×{S} → {S_t}G")
-    await i.response.send_message(f"💱 **{i.user.display_name}の景品交換結果**\n" + "\n".join(det) +
-                                  f"\n💰 合計 {total}G をウォレットに加算！\n👛 現在:{u['wallet']}G", ephemeral=True)
+    if L: det.append(f"💴×{L} → {L_t}G")
+    if M: det.append(f"💵×{M} → {M_t}G")
+    if S: det.append(f"💶×{S} → {S_t}G")
+    await i.response.send_message(f"💱 交換結果：\n" + "\n".join(det) +
+                                  f"\n💰 合計 {total}G 加算！\n👛 現在:{u['wallet']}G", ephemeral=True)
 
-# --- スロット ---
-@casino.command(name="スロット", description="3Coinで1回転！縦リール演出！")
-async def slot(i):
+# --- スロット（💖系1/240・高確率モード対応） ---
+@casino.command(name="11_スロット", description="3Coinで1回転！（🤡後はBIG/REG確率UP）")
+async def casino_slot(i: discord.Interaction):
     uid = str(i.user.id)
     ensure_account(uid)
     u = balances[uid]
     b = u.get("bonus_spins", 0)
     f = u.get("free_spin", False)
+    high_mode = u.get("high_mode", False)
+
     if f:
         u["free_spin"] = False
     elif u["coin"] < 3:
-        return await i.response.send_message("🪙 不足(3Coin必要)", ephemeral=True)
+        return await i.response.send_message("🪙 Coin不足（3Coin必要）", ephemeral=True)
     else:
         u["coin"] -= 3
-    m = await i.response.send_message("🎰 スロット始動…", ephemeral=True)
+
+    await i.response.send_message("🎰 スロットを起動中…", ephemeral=True)
+    m = await i.followup.send("🎰 リール回転中…", ephemeral=True)
     await asyncio.sleep(0.1)
-    s = ["🔔", "🫒", "🔵", "🍒", "🤡", "🔶", "💷"]
+
+    symbols = ["🔔", "🍇", "🔵", "🍒", "🤡", "💖", "💷"]
     roll = random.randint(1, 1000)
     F = [[""] * 3 for _ in range(3)]
     pay = 0
     text = ""
+
     if b > 0:
         F = [["🔔"] * 3 for _ in range(3)]
         pay, text = 15, "+15枚"
@@ -248,45 +238,62 @@ async def slot(i):
     else:
         if roll <= 1:
             F = [["🤡"] * 3 for _ in range(3)]
-            pay, text = 10, "+10枚"
+            pay, text = 10, "+10枚 🎯 BONUS高確率ゾーン突入！"
+            u["high_mode"] = True
+        elif high_mode and roll <= 17:
+            F = [["💖"] * 3 for _ in range(3)]
+            pay, u["bonus_spins"], text = 3, 30, "BIG BONUS!!"
+            u["high_mode"] = False
+        elif high_mode and roll <= 34:
+            F = [["💖", "💖", "💷"] for _ in range(3)]
+            pay, u["bonus_spins"], text = 3, 15, "REGULAR BONUS!!"
+            u["high_mode"] = False
         elif roll <= 5:
-            F = [["🔶"] * 3 for _ in range(3)]
-            pay, u["bonus_spins"], text = 3, 30, "+3枚(BIG)"
+            F = [["💖"] * 3 for _ in range(3)]
+            pay, u["bonus_spins"], text = 3, 30, "BIG BONUS!!"
         elif roll <= 9:
-            F = [["🔶", "🔶", "💷"] for _ in range(3)]
-            pay, u["bonus_spins"], text = 3, 15, "+3枚(REG)"
+            F = [["💖", "💖", "💷"] for _ in range(3)]
+            pay, u["bonus_spins"], text = 3, 15, "REGULAR BONUS!!"
         elif roll <= 50:
             F = [["🔔"] * 3 for _ in range(3)]
             pay, text = 15, "+15枚"
         elif roll <= 217:
-            F = [["🫒"] * 3 for _ in range(3)]
+            F = [["🍇"] * 3 for _ in range(3)]
             pay, text = 8, "+8枚"
         elif roll <= 360:
             F = [["🔵"] * 3 for _ in range(3)]
             u["free_spin"], text = True, "FREE SPIN!"
         else:
-            F = [[random.choice(s) for _ in range(3)] for _ in range(3)]
+            F = [[random.choice(symbols) for _ in range(3)] for _ in range(3)]
+
     u["coin"] += pay
     save_data()
+
     for _ in range(6):
-        frame = "\n".join(" ".join(random.choice(s) for _ in range(3)) for _ in range(3))
+        frame = "\n".join(" ".join(random.choice(symbols) for _ in range(3)) for _ in range(3))
         await m.edit(content=f"🎰 リール回転中…\n{frame}")
         await asyncio.sleep(0.05)
-    D = [[random.choice(s) for _ in range(3)] for _ in range(3)]
+
+    D = [[random.choice(symbols) for _ in range(3)] for _ in range(3)]
     for c in range(3):
         for r in range(3):
             D[r][c] = F[r][c]
         await m.edit(content=f"🎰 リール回転中…\n" + "\n".join(" ".join(x) for x in D))
         await asyncio.sleep(0.25 + c * 0.15)
+
     disp = "\n".join(" ".join(r) for r in F)
     v = discord.ui.View()
     v.add_item(discord.ui.Button(label="もう1回回す", style=discord.ButtonStyle.primary, custom_id="slot_retry"))
-    await m.edit(content=f"🎰 **{i.user.display_name}のスロット結果！**\n{disp}\n{text}\n🪙 {u['coin']}枚", view=v)
+    mode_status = "（🎯BONUS高確率ゾーン中）" if u.get("high_mode", False) else ""
+    await m.edit(
+        content=f"🎰 **{i.user.display_name} のスロット結果！**{mode_status}\n{disp}\n{text}\n🪙 現在：{u['coin']}枚",
+        view=v
+    )
 
 @bot.event
 async def on_interaction(i):
     if i.type == discord.InteractionType.component and i.data.get("custom_id") == "slot_retry":
-        await slot(i)
+        await casino_slot(i)
 
 bot.tree.add_command(casino)
 
