@@ -11,11 +11,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- グローバル変数 ---
 balances, voice_times, last_message_time = {}, {}, {}
 BALANCES_FILE = "balances.json"
-
-# 💰 年利50% → 日利換算（複利）
-ANNUAL_RATE = 0.5  # 年利50%
-INTEREST_RATE = (1 + ANNUAL_RATE) ** (1 / 365) - 1  # ≒ 0.001118（日利0.1118%）
-JST = timezone(timedelta(hours=9))  # 日本時間設定
+# 年利50%を日利に換算
+INTEREST_RATE = (1.5 ** (1/365)) - 1  # 約0.1118%
 
 # --- データ保存・読み込み ---
 def save_data():
@@ -40,7 +37,7 @@ def ensure_account(uid):
 
 
 # ==============================
-# 🪙 チャット報酬・VC報酬
+# 🪙 チャット報酬・VC報酬・利息
 # ==============================
 @bot.event
 async def on_message(message: discord.Message):
@@ -70,20 +67,10 @@ async def on_voice_state_update(member, before, after):
             balances[uid]["bank"] += mins
             save_data()
 
-
-# ==============================
-# 💰 日本時間0時 利息付与
-# ==============================
-@tasks.loop(minutes=1)
-async def check_interest_time():
-    """毎分チェックして、日本時間0時になったら利息付与"""
-    now = datetime.now(JST)
-    if now.hour == 0 and now.minute == 0:  # 0時ちょうど
-        await apply_interest_once()
-        print("💰 日本時間0時：利息付与完了！")
-
-async def apply_interest_once():
-    today = datetime.utcnow().date()
+@tasks.loop(hours=24)
+async def apply_interest():
+    jst = timezone(timedelta(hours=9))
+    today = datetime.now(jst).date()
     for uid, data in balances.items():
         ensure_account(uid)
         last = datetime.strptime(data.get("last_interest", str(today)), "%Y-%m-%d").date()
@@ -93,6 +80,7 @@ async def apply_interest_once():
                 data["bank"] = round(data["bank"] * (1 + INTEREST_RATE), 2)
             data["last_interest"] = str(today)
     save_data()
+    print(f"💰 {today} 利息を反映しました（年利50%・日利{INTEREST_RATE*100:.4f}%）")
 
 
 # ==============================
@@ -119,9 +107,9 @@ async def omikuji(interaction: discord.Interaction):
 
 
 # ==============================
-# 🏦 銀行グループ
+# 🏦 bankグループ
 # ==============================
-bank_group = discord.app_commands.Group(name="銀行", description="銀行関連のコマンド")
+bank_group = discord.app_commands.Group(name="bank", description="銀行関連のコマンド")
 
 @bank_group.command(name="残高確認", description="あなたの現在の所持金と口座残高を確認します")
 async def balance(interaction: discord.Interaction):
@@ -183,11 +171,11 @@ bot.tree.add_command(bank_group)
 
 
 # ==============================
-# 🎰 CASINOグループ
+# 🎰 casinoグループ
 # ==============================
-casino_group = discord.app_commands.Group(name="CASINO", description="カジノゲーム関連のコマンド")
+casino_group = discord.app_commands.Group(name="casino", description="カジノゲーム関連のコマンド")
 
-@casino_group.command(name="Coin貸し出し", description="20Gで1Coinを購入（交換）します")
+@casino_group.command(name="coin貸し出し", description="20Gで1Coinを購入（交換）します")
 async def coin_loan(interaction: discord.Interaction, coin数: int):
     uid = str(interaction.user.id)
     ensure_account(uid)
@@ -247,10 +235,8 @@ async def dice(interaction: discord.Interaction, number: int, bet: int):
 
     save_data()
     await interaction.response.send_message(
-        f"🎲 **{interaction.user.display_name} のダイスチャレンジ！**\n"
-        f"選んだ数字：{number}\n{msg}\n🪙 現在の保有Coin：{balances[uid]['coin']}枚",
-        ephemeral=True
-    )
+        f"🎲 **{interaction.user.display_name} のダイスチャレンジ！**\n選んだ数字：{number}\n{msg}\n🪙 現在の保有Coin：{balances[uid]['coin']}枚",
+        ephemeral=True)
 
 bot.tree.add_command(casino_group)
 
@@ -267,9 +253,8 @@ load_data()
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    check_interest_time.start()
-    print(f"✅ コマンドを再同期しました！（日利{INTEREST_RATE*100:.4f}% / 年利50%）")
-    print("⏰ 日本時間0:00ごとに利息が自動反映されます。")
+    apply_interest.start()
+    print("✅ コマンドを再同期しました！")
     print(f"✅ ログインしました: {bot.user}")
 
 keep_alive()
