@@ -12,22 +12,29 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 JST = timezone(timedelta(hours=9))
 reminders = {}
 
-
 # -------------------- リマインド --------------------
 @bot.tree.command(name="リマインド", description="指定した時間または○分後にリマインドを送ります（日本時間）")
 @app_commands.describe(
     時間または分後="「21:30」または「15」など（分後指定もOK）",
-    メッセージ="リマインド内容"
+    メッセージ="リマインド内容",
+    表示モード="bot または user（ユーザー風）"
 )
-async def remind(interaction: discord.Interaction, 時間または分後: str, メッセージ: str):
-    # 応答タイムアウト防止
+@app_commands.choices(表示モード=[
+    app_commands.Choice(name="botの見た目で送信", value="bot"),
+    app_commands.Choice(name="ユーザーの見た目で送信", value="user")
+])
+async def remind(
+    interaction: discord.Interaction,
+    時間または分後: str,
+    メッセージ: str,
+    表示モード: app_commands.Choice[str]
+):
     await interaction.response.defer(ephemeral=True)
-
     now = datetime.now(JST)
     remind_time = None
     wait_seconds = None
 
-    # --- 「○分後」指定を判定 ---
+    # --- 「○分後」指定 ---
     if re.fullmatch(r"\d+", 時間または分後):
         minutes = int(時間または分後)
         if minutes <= 0:
@@ -37,46 +44,49 @@ async def remind(interaction: discord.Interaction, 時間または分後: str, �
         wait_seconds = minutes * 60
         time_text = f"{minutes}分後（{remind_time.strftime('%H:%M')}ごろ）"
 
-    # --- 「HH:MM」形式を判定 ---
+    # --- 「HH:MM」形式 ---
     elif re.fullmatch(r"\d{1,2}:\d{2}", 時間または分後):
-        try:
-            target = datetime.strptime(時間または分後, "%H:%M").replace(
-                year=now.year, month=now.month, day=now.day, tzinfo=JST
-            )
-            if target < now:
-                target += timedelta(days=1)
-            remind_time = target
-            wait_seconds = (remind_time - now).total_seconds()
-            time_text = remind_time.strftime("%H:%M")
-        except ValueError:
-            await interaction.followup.send("時間は 00:00～23:59 の形式で入力してください。", ephemeral=True)
-            return
+        target = datetime.strptime(時間または分後, "%H:%M").replace(
+            year=now.year, month=now.month, day=now.day, tzinfo=JST
+        )
+        if target < now:
+            target += timedelta(days=1)
+        remind_time = target
+        wait_seconds = (remind_time - now).total_seconds()
+        time_text = remind_time.strftime("%H:%M")
     else:
         await interaction.followup.send("時間は「HH:MM」または「○分後」で指定してください。", ephemeral=True)
         return
 
-    # --- リマインドID作成 ---
     remind_id = f"{interaction.user.id}-{remind_time.strftime('%Y%m%d%H%M%S')}"
+    mode = 表示モード.value
 
     # --- 実際のリマインド処理 ---
     async def remind_task():
         await asyncio.sleep(wait_seconds)
-        embed = discord.Embed(
-            title="⏰ リマインド",
-            description=メッセージ,
-            color=discord.Color.blurple(),
-            timestamp=datetime.now(JST)
-        )
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-        await interaction.channel.send(embed=embed)
+        try:
+            if mode == "user":
+                # Webhookでユーザー風にメッセージ送信
+                webhook = await interaction.channel.create_webhook(name=interaction.user.display_name)
+                await webhook.send(
+                    メッセージ,
+                    username=interaction.user.display_name,
+                    avatar_url=interaction.user.display_avatar.url
+                )
+                await webhook.delete()
+            else:
+                # Bot本人で送信（Embedなし）
+                await interaction.channel.send(f"{interaction.user.mention} {メッセージ}")
+        except Exception as e:
+            print(f"リマインド送信エラー: {e}")
         reminders.pop(remind_id, None)
 
     task = asyncio.create_task(remind_task())
-    reminders[remind_id] = {"task": task, "time": remind_time, "message": メッセージ}
+    reminders[remind_id] = {"task": task, "time": remind_time, "message": メッセージ, "mode": mode}
 
     view = CancelButton(interaction.user.id, remind_id)
     await interaction.followup.send(
-        f"✅ リマインドを設定しました！\n**{time_text}** に以下の内容をお知らせします：\n> {メッセージ}",
+        f"✅ リマインドを設定しました！\n**{time_text}** に以下の内容を送信します：\n> {メッセージ}\n\n表示モード：**{ 'ユーザー風' if mode=='user' else 'Bot' }**",
         view=view,
         ephemeral=True
     )
@@ -103,13 +113,11 @@ class CancelButton(discord.ui.View):
             await interaction.response.send_message("このリマインドはすでに削除されています。", ephemeral=True)
 
 
-# -------------------- 起動時処理 --------------------
+# -------------------- 起動処理 --------------------
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print(f"✅ ログイン完了: {bot.user}")
 
-
-# -------------------- 起動 --------------------
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
