@@ -18,7 +18,7 @@ JST = timezone(timedelta(hours=9))
 # ===== データファイル =====
 DATA_FILE = "cl_data.json"
 FEEDS_FILE = "feeds.json"
-TEMPLATE_FILE = "auto_templates.json"  # ピン留め用
+TEMPLATE_FILE = "auto_templates.json"
 
 cl_data = {"users": {}, "enabled": False}
 reminders = {}
@@ -28,37 +28,26 @@ tracking_feeds = {}
 # ===== 絵文字判定関数 =====
 def is_emoji(s: str) -> bool:
     """Unicode絵文字またはDiscordカスタム絵文字かどうかを判定"""
-    # Discordカスタム絵文字 (<:name:id> or <a:name:id>)
+    # カスタム絵文字 (<:name:id> or <a:name:id>)
     if re.fullmatch(r"<a?:\w+:\d+>", s):
         return True
-    # 標準絵文字（Unicode範囲）
-    emoji_pattern = re.compile(
-        r"[\U0001F1E0-\U0001F1FF"  # flags
-        r"\U0001F300-\U0001F5FF"   # symbols & pictographs
-        r"\U0001F600-\U0001F64F"   # emoticons
-        r"\U0001F680-\U0001F6FF"   # transport & map
-        r"\U0001F700-\U0001F77F"   # alchemical symbols
-        r"\U0001F780-\U0001F7FF"   # geometric shapes extended
-        r"\U0001F800-\U0001F8FF"   # supplemental arrows
-        r"\U0001F900-\U0001F9FF"   # supplemental symbols
-        r"\U0001FA00-\U0001FAFF"   # chess pieces, symbols
-        r"\U00002702-\U000027B0"   # dingbats
-        r"\U000024C2-\U0001F251"   # enclosed characters
-        r"]+", flags=re.UNICODE
-    )
+    # 標準絵文字（広範囲対応）
+    emoji_pattern = re.compile(r"(<a?:\w+:\d+>|[\U00010000-\U0010FFFF])", flags=re.UNICODE)
     return bool(emoji_pattern.fullmatch(s))
 
-# ピン留め：チャンネルごとのテンプレテキスト/直近テンプレメッセID
+# ===== ピン留めテンプレート管理 =====
 def load_templates():
     if os.path.exists(TEMPLATE_FILE):
         with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
+
 def save_templates(data):
     with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+
 auto_templates = load_templates()
-last_template_messages = {}  # {channel_id: message_id}
+last_template_messages = {}
 
 # ===== データ管理 =====
 def load_data():
@@ -90,12 +79,9 @@ def save_feeds():
         json.dump(tracking_feeds, f, ensure_ascii=False, indent=4)
 
 
+# ------------------------------------------------------------------------------------------------------------
+# ===== Communication Level 機能 =====
 
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== Communication Level 設定 =====
 CL_LEVELS = [
     {"name": "Communication Level 1", "text": 10, "vc": 30, "color": 0x999999},
     {"name": "Communication Level 2", "text": 50, "vc": 180, "color": 0x55ff55},
@@ -105,30 +91,28 @@ CL_LEVELS = [
     {"name": "Communication Level 6", "text": 1000, "vc": 14400, "color": 0xff5555},
 ]
 
-# ===== on_voice_state_update =====
 @bot.event
 async def on_voice_state_update(member, before, after):
     if not cl_data.get("enabled"):
         return
     user_id = str(member.id)
 
-    # 入室時刻を記録
+    # 入室
     if before.channel is None and after.channel is not None:
         voice_sessions[user_id] = time.time()
 
-    # 退出時に滞在時間を加算
+    # 退出時
     elif before.channel is not None and after.channel is None:
         if user_id in voice_sessions:
             duration = int((time.time() - voice_sessions[user_id]) / 60)
             del voice_sessions[user_id]
 
-            # Communication Levelデータ更新
             if user_id not in cl_data["users"]:
                 cl_data["users"][user_id] = {"text": 0, "vc": 0}
             cl_data["users"][user_id]["vc"] += duration
             save_data()
 
-            # 🔸 VC滞在報酬：1分につき5GOLD
+            # VC滞在報酬
             if duration > 0:
                 try:
                     add_gold(member.id, duration * 5)
@@ -137,7 +121,6 @@ async def on_voice_state_update(member, before, after):
 
             await check_and_assign_roles(member)
 
-# ===== ロール付与処理 =====
 async def check_and_assign_roles(member: discord.Member):
     guild = member.guild
     user_id = str(member.id)
@@ -172,7 +155,7 @@ async def check_and_assign_roles(member: discord.Member):
                 await member.remove_roles(r)
                 print(f"{member.display_name} から {level['name']} を削除しました")
 
-# ===== ON/OFFコマンド =====
+# ===== ON/OFF =====
 @bot.tree.command(name="z1_cl_on", description="Communication Level機能をONにします（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def z1_cl_on(interaction: discord.Interaction):
@@ -187,12 +170,7 @@ async def z2_cl_off(interaction: discord.Interaction):
     save_data()
     await interaction.response.send_message("Communication Level機能をOFFにしました。", ephemeral=True)
 
-
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
+# ------------------------------------------------------------------------------------------------------------
 # ===== ロール付与メッセージ機能 =====
 @bot.tree.command(
     name="x1_ロール付与メッセージ",
@@ -260,26 +238,21 @@ class RoleButton(discord.ui.Button):
         await interaction.response.defer()
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== 問い合わせ設定 =====
+# ------------------------------------------------------------------------------------------------------------
+# ===== 問い合わせチャンネル =====
 @bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します（管理者のみ）")
 @app_commands.describe(
-    対象ロール="問い合わせに対応するロールを指定してください（例：@スタッフ）",
+    対象ロール="問い合わせ対応ロールを指定（例：@スタッフ）",
     メッセージ内容="上部に表示する説明メッセージ",
     ボタンと説明="例：『バグ報告:不具合報告はこちら』『質問:質問はこちら』（カンマ区切り）"
 )
 @app_commands.default_permissions(administrator=True)
-async def a6_inquiry_setup(
+async def inquiry_setup(
     interaction: discord.Interaction,
     対象ロール: discord.Role,
     メッセージ内容: str,
     ボタンと説明: str
 ):
-    # 入力解析
     try:
         pairs = [x.strip() for x in re.split("[,、]", ボタンと説明) if x.strip()]
         button_data = []
@@ -293,7 +266,6 @@ async def a6_inquiry_setup(
         await interaction.response.send_message(f"入力エラー: {e}", ephemeral=True)
         return
 
-    # ボタン生成
     view = InquiryButtonView(対象ロール, button_data)
     await interaction.response.send_message("問い合わせボタンを設置しました。", ephemeral=True)
     await interaction.channel.send(メッセージ内容, view=view)
@@ -344,16 +316,12 @@ class DeleteChannelButton(discord.ui.View):
         await interaction.channel.delete(reason="問い合わせ完了により削除")
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== ピン留め =====
+# ------------------------------------------------------------------------------------------------------------
+# ===== ピン留め機能 =====
 @bot.tree.command(name="x3_ピン留め設定", description="このチャンネルにピン留めを設定します（管理者のみ）")
 @app_commands.describe(メッセージ="ピン留め内容")
 @app_commands.default_permissions(administrator=True)
-async def a2_pin(interaction: discord.Interaction, メッセージ: str):
+async def pin_set(interaction: discord.Interaction, メッセージ: str):
     channel_id = str(interaction.channel.id)
     auto_templates[channel_id] = メッセージ
     save_templates(auto_templates)
@@ -361,7 +329,7 @@ async def a2_pin(interaction: discord.Interaction, メッセージ: str):
 
 @bot.tree.command(name="x4_ピン留め停止", description="このチャンネルのピン留めを停止します（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
-async def a3_pin_stop(interaction: discord.Interaction):
+async def pin_stop(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
     if channel_id in auto_templates:
         del auto_templates[channel_id]
@@ -370,7 +338,6 @@ async def a3_pin_stop(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("このチャンネルにはピン留めが設定されていません。", ephemeral=True)
 
-# ===== 統合 on_message（CLカウント + ピン留め維持 + チャット報酬） =====
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -378,7 +345,7 @@ async def on_message(message: discord.Message):
 
     channel_id = str(message.channel.id)
 
-    # 🔸 チャット報酬：2文字につき1GOLD
+    # チャット報酬（2文字で1G）
     try:
         gain = len(message.content) // 2
         if gain > 0:
@@ -386,7 +353,7 @@ async def on_message(message: discord.Message):
     except Exception as e:
         print(f"チャット報酬付与エラー: {e}")
 
-    # ピン留めテンプレ維持
+    # ピン留め維持
     if channel_id in auto_templates:
         template_text = auto_templates[channel_id]
         if channel_id in last_template_messages:
@@ -397,15 +364,11 @@ async def on_message(message: discord.Message):
                 pass
             except discord.Forbidden:
                 print(f"Botに削除権限がありません（チャンネルID: {channel_id}）")
-            except Exception as e:
-                print(f"ピン留め削除エラー: {e}")
         try:
             new_msg = await message.channel.send(template_text)
             last_template_messages[channel_id] = new_msg.id
         except discord.Forbidden:
             print(f"Botに送信権限がありません（チャンネルID: {channel_id}）")
-        except Exception as e:
-            print(f"ピン留め投稿エラー: {e}")
 
     # Communication Level 記録
     if cl_data.get("enabled"):
@@ -416,37 +379,32 @@ async def on_message(message: discord.Message):
         save_data()
         await check_and_assign_roles(message.author)
 
-    # 他コマンド処理
     await bot.process_commands(message)
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== Xポスト引用 (RSS) =====
+# ------------------------------------------------------------------------------------------------------------
+# ===== Xポスト引用（RSS） =====
 @tasks.loop(minutes=5)
 async def check_feeds():
     for channel_id, info in tracking_feeds.items():
         channel = bot.get_channel(int(channel_id))
-        if channel is None:
+        if not channel:
             continue
         feed = feedparser.parse(info["rss"])
         if not feed.entries:
             continue
-        latest_entry = feed.entries[0]
-        latest_link = latest_entry.link
-        desc = latest_entry.get("description", "").lower()
-        if latest_link != info.get("latest") and not any(x in desc for x in ["rt @", "retweeted", "mention"]):
-            info["latest"] = latest_link
+        latest = feed.entries[0]
+        link = latest.link
+        desc = latest.get("description", "").lower()
+        if link != info.get("latest") and not any(x in desc for x in ["rt @", "retweeted", "mention"]):
+            info["latest"] = link
             save_feeds()
-            await channel.send(latest_link)
+            await channel.send(link)
 
 @bot.tree.command(name="x5_xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります（管理者のみ）")
 @app_commands.describe(アカウント名="例：elonmusk")
 @app_commands.default_permissions(administrator=True)
-async def a4_xpost(interaction: discord.Interaction, アカウント名: str):
+async def x_post(interaction: discord.Interaction, アカウント名: str):
     rss_url = f"https://nitter.net/{アカウント名}/rss"
     tracking_feeds[str(interaction.channel.id)] = {"rss": rss_url, "latest": None}
     save_feeds()
@@ -456,22 +414,17 @@ async def a4_xpost(interaction: discord.Interaction, アカウント名: str):
 
 @bot.tree.command(name="x6_xポスト停止", description="このチャンネルでのXポスト監視を停止します（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
-async def a5_xpost_stop(interaction: discord.Interaction):
-    channel_id = str(interaction.channel.id)
-    if channel_id in tracking_feeds:
-        del tracking_feeds[channel_id]
+async def x_post_stop(interaction: discord.Interaction):
+    cid = str(interaction.channel.id)
+    if cid in tracking_feeds:
+        del tracking_feeds[cid]
         save_feeds()
         await interaction.response.send_message("このチャンネルでのXポスト監視を停止しました。", ephemeral=True)
     else:
-        await interaction.response.send_message("このチャンネルでは現在Xポスト監視が有効ではありません。", ephemeral=True)
+        await interaction.response.send_message("このチャンネルでは監視が有効ではありません。", ephemeral=True)
 
-
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== Goldシステム（通貨 + ショップ） =====
+# ------------------------------------------------------------------------------------------------------------
+# ===== Gold システム（通貨） =====
 
 GOLD_FILE = "gold_data.json"
 SHOP_CATEGORIES = ["装飾", "称号", "ロール"]
@@ -482,22 +435,23 @@ def load_gold():
         with open(GOLD_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
+
 def save_gold(data):
     with open(GOLD_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 gold_data = load_gold()
 
-# --- 残高取得 ---
+# --- 残高操作 ---
 def get_balance(user_id: int) -> int:
     return gold_data.get(str(user_id), 0)
 
-# --- 残高追加／減少 ---
 def add_gold(user_id: int, amount: int):
     uid = str(user_id)
     gold_data[uid] = gold_data.get(uid, 0) + amount
     save_gold(gold_data)
 
+# ===== 毎日配布（JST 00:00 に全ユーザーへ 100 GOLD）=====
 @tasks.loop(time=dtime(hour=0, minute=0, tzinfo=JST))
 async def daily_gold_distribution():
     count = 0
@@ -507,7 +461,7 @@ async def daily_gold_distribution():
                 continue
             add_gold(member.id, 100)
             count += 1
-    print(f"[{datetime.now(JST).strftime('%m/%d %H:%M')}] 🎁 毎日配布完了: {count}ユーザーに100 GOLD付与")
+    print(f"[{datetime.now(JST).strftime('%m/%d %H:%M')}] 毎日配布完了: {count}ユーザーに100 GOLD付与")
 
 # ===== 新規参加者へ自動10000GOLD付与 =====
 @bot.event
@@ -524,7 +478,7 @@ async def on_member_join(member: discord.Member):
 async def distribute_initial_gold():
     FLAG_FILE = "initial_gold_flag.json"
     if os.path.exists(FLAG_FILE):
-        return  # すでに配布済みならスキップ
+        return  # すでに配布済み
 
     count = 0
     for guild in bot.guilds:
@@ -537,36 +491,28 @@ async def distribute_initial_gold():
     with open(FLAG_FILE, "w", encoding="utf-8") as f:
         json.dump({"distributed": True, "count": count}, f, ensure_ascii=False, indent=4)
 
-    print(f"💰 初回ボーナス: 既存メンバー {count} 名に10000 GOLDを配布しました。")
+    print(f"初回ボーナス: 既存メンバー {count} 名に10000 GOLDを配布しました。")
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
+# ------------------------------------------------------------------------------------------------------------
 # ===== /a1_残高確認 =====
 @bot.tree.command(name="a1_残高確認", description="所持GOLDを確認できます")
-async def check_gold(interaction: discord.Interaction):
+async def a1_check_gold(interaction: discord.Interaction):
     balance = get_balance(interaction.user.id)
     await interaction.response.send_message(
-        f"あなたの所持GOLDは **{balance} GOLD** です💰",
+        f"あなたの所持GOLDは **{balance} GOLD** です",
         ephemeral=True
     )
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
+# ------------------------------------------------------------------------------------------------------------
 # ===== /a2_送金 =====
 @bot.tree.command(name="a2_送金", description="他のユーザーにGOLDを送金します")
 @app_commands.describe(
     相手="送金先ユーザー",
     金額="送金するGOLDの額"
 )
-async def send_gold(interaction: discord.Interaction, 相手: discord.Member, 金額: int):
+async def a2_send_gold(interaction: discord.Interaction, 相手: discord.Member, 金額: int):
     sender_id = str(interaction.user.id)
     receiver_id = str(相手.id)
     sender_balance = get_balance(interaction.user.id)
@@ -581,222 +527,197 @@ async def send_gold(interaction: discord.Interaction, 相手: discord.Member, �
         await interaction.response.send_message("自分自身には送金できません。", ephemeral=True)
         return
 
-    # 処理
     add_gold(interaction.user.id, -金額)
     add_gold(相手.id, 金額)
 
     await interaction.response.send_message(
-        f"{相手.display_name} に **{金額} GOLD** を送金しました💸",
+        f"{相手.display_name} に **{金額} GOLD** を送金しました",
         ephemeral=True
     )
 
 
+# ------------------------------------------------------------------------------------------------------------
+# ===== ショップ（/a3_ショップ → /a3_ショップ 購入 連動） =====
 
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== ショップ状態記録 =====
+# ショップ状態記録：ユーザーごとに「表示中のエフェメラル」を有効扱いにする
 active_shops = {}  # {user_id: message_id}
 
-# ===== /a3_ショップ =====
-@bot.tree.command(name="a3_ショップ", description="GOLDで商品を購入できます")
-@app_commands.describe(カテゴリ="ショップカテゴリを選択")
-@app_commands.choices(カテゴリ=[
-    app_commands.Choice(name="装飾", value="装飾"),
-    app_commands.Choice(name="称号", value="称号"),
-    app_commands.Choice(name="ロール", value="ロール"),
-])
-async def shop(interaction: discord.Interaction, カテゴリ: app_commands.Choice[str]):
-    balance = get_balance(interaction.user.id)
-    cat = カテゴリ.value
+# -----------------------------------------------
+# ショップ機能をグループ化して /購入 を非表示にする
+# -----------------------------------------------
+class ShopGroup(app_commands.Group):
+    def __init__(self):
+        super().__init__(name="a3_ショップ", description="GOLDで商品を購入できます")
 
-    if cat == "装飾":
-        msg = (
-            f"**装飾ショップへようこそ！**\n"
-            "好きな絵文字で名前を装飾できます！\n"
-            "例：🔥あなたの名前🔥\n\n"
-            "価格：**1000 GOLD**\n"
-            "購入方法：`/購入 絵文字`\n"
-            f"（あなたの所持GOLD：**{balance} GOLD**）"
-        )
+    # ===== /a3_ショップ open =====
+    @app_commands.command(name="open", description="ショップを開きます")
+    @app_commands.describe(カテゴリ="ショップカテゴリを選択")
+    @app_commands.choices(カテゴリ=[
+        app_commands.Choice(name="装飾", value="装飾"),
+        app_commands.Choice(name="称号", value="称号"),
+        app_commands.Choice(name="ロール", value="ロール"),
+    ])
+    async def open(self, interaction: discord.Interaction, カテゴリ: app_commands.Choice[str]):
+        balance = get_balance(interaction.user.id)
+        cat = カテゴリ.value
 
-    elif cat == "称号":
-        msg = (
-            f"**称号ショップへようこそ！**\n"
-            "オリジナル称号を名前に付与できます！\n"
-            "例：`冒険者 あなたの名前`\n\n"
-            "価格：**3000 GOLD**\n"
-            "購入方法：`/購入 称号名`\n"
-            f"（あなたの所持GOLD：**{balance} GOLD**）"
-        )
-
-    elif cat == "ロール":
-        msg = (
-            f"**ロールショップへようこそ！**\n"
-            "GOLDで好きな属性ロールを購入できます！\n\n"
-            "1 🔥火属性🔥　500 GOLD\n"
-            "2 💧水属性💧　500 GOLD\n"
-            "3 🌪️風属性🌪️　500 GOLD\n"
-            "4 🌱土属性🌱　500 GOLD\n\n"
-            "購入方法：`/購入 番号`\n"
-            f"（あなたの所持GOLD：**{balance} GOLD**）"
-        )
-    else:
-        await interaction.response.send_message("存在しないカテゴリです。", ephemeral=True)
-        return
-
-    # --- メッセージ送信 ---
-    await interaction.response.send_message(msg, ephemeral=True)
-    sent_message = await interaction.original_response()
-
-    # --- ショップ有効化（ユーザーごとに記録）---
-    active_shops[interaction.user.id] = sent_message.id
-
-    # --- メッセージ消滅監視（エフェメラルは削除を検知できないため時間監視を併用）---
-    async def expire_shop():
-        await asyncio.sleep(180)  # 3分後自動無効化
-        if interaction.user.id in active_shops and active_shops[interaction.user.id] == sent_message.id:
-            del active_shops[interaction.user.id]
-
-    asyncio.create_task(expire_shop())
-
-
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== /購入 =====
-@bot.tree.command(name="購入", description="ショップの商品を購入します")
-@app_commands.describe(内容="購入内容")
-async def buy(interaction: discord.Interaction, 内容: str):
-    uid = interaction.user.id
-    balance = get_balance(uid)
-
-    # --- ショップ有効確認 ---
-    if uid not in active_shops:
-        await interaction.response.send_message(
-            "`/a3_ショップ` を開いた状態でのみ購入できます。\n"
-            "再度 `/a3_ショップ` を開いてください。",
-            ephemeral=True
-        )
-        return
-
-    # --- 有効メッセージの存在チェック ---
-    try:
-        await interaction.followup.get_original_response()  # エフェメラルは参照不可なのでpass
-    except:
-        # メッセージ削除 or エフェメラル消滅時
-        del active_shops[uid]
-        await interaction.response.send_message(
-            "ショップが閉じられました。再度 `/a3_ショップ` を開いてください。",
-            ephemeral=True
-        )
-        return
-
-    # --- 購入処理開始 ---
-    old_name = interaction.user.display_name
-    clean_name = old_name
-
-    # 🔹 既存の装飾絵文字と称号を除去
-    clean_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", clean_name)
-    clean_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", clean_name)
-    clean_name = re.sub(r"^\[.*?\]\s*", "", clean_name).strip()
-
-    # 🔹 現在の称号と装飾を取得
-    current_title = None
-    current_decoration = None
-
-    title_match = re.search(r"\[(.*?)\]", old_name)
-    if title_match:
-        current_title = title_match.group(1)
-
-    decoration_match = re.match(r"(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])", old_name)
-    if decoration_match:
-        current_decoration = decoration_match.group(1)
-
-    # --- 装飾購入 ---
-    if is_emoji(内容):
-        cost = 1000
-        if balance < cost:
-            await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+        if cat == "装飾":
+            msg = (
+                f"**装飾ショップへようこそ！**\n"
+                "好きな絵文字で名前を装飾できます！\n"
+                "例：🔥[称号] あなたの名前🔥\n\n"
+                "価格：**1000 GOLD**\n"
+                "購入方法：`/a3_ショップ 購入 絵文字`\n"
+                f"（あなたの所持GOLD：**{balance} GOLD**）"
+            )
+        elif cat == "称号":
+            msg = (
+                f"**称号ショップへようこそ！**\n"
+                "称号は **[称号]** 形式で付与されます。\n"
+                "装飾と同時に付与されている場合、`絵文字 [称号] 名前 絵文字` の並びになります。\n\n"
+                "価格：**3000 GOLD**\n"
+                "購入方法：`/a3_ショップ 購入 称号名`\n"
+                f"（あなたの所持GOLD：**{balance} GOLD**）"
+            )
+        elif cat == "ロール":
+            msg = (
+                f"**ロールショップへようこそ！**\n"
+                "GOLDで好きな属性ロールを購入できます！\n\n"
+                "1 🔥火属性🔥　500 GOLD\n"
+                "2 💧水属性💧　500 GOLD\n"
+                "3 🌪️風属性🌪️　500 GOLD\n"
+                "4 🌱土属性🌱　500 GOLD\n\n"
+                "購入方法：`/a3_ショップ 購入 番号`\n"
+                f"（あなたの所持GOLD：**{balance} GOLD**）"
+            )
+        else:
+            await interaction.response.send_message("存在しないカテゴリです。", ephemeral=True)
             return
 
-        # 新しい装飾を適用
-        new_decoration = 内容
-        new_name = f"{new_decoration} "
-        if current_title:
-            new_name += f"[{current_title}] "
-        new_name += f"{clean_name} {new_decoration}"
+        # エフェメラル表示 & 有効化
+        await interaction.response.send_message(msg, ephemeral=True)
+        sent_message = await interaction.original_response()
+        active_shops[interaction.user.id] = sent_message.id
 
-        add_gold(uid, -cost)
-        await interaction.user.edit(nick=new_name.strip())
-        await interaction.response.send_message(f"装飾を変更しました！ → {new_name}", ephemeral=True)
+        # 3分で自動無効化
+        async def expire_shop():
+            await asyncio.sleep(180)
+            if interaction.user.id in active_shops and active_shops[interaction.user.id] == sent_message.id:
+                del active_shops[interaction.user.id]
 
-        if uid in active_shops:
+        asyncio.create_task(expire_shop())
+
+    # ===== /a3_ショップ 購入 =====
+    @app_commands.command(name="購入", description="ショップ内の商品を購入します（ショップ開封中のみ有効）")
+    @app_commands.describe(内容="購入内容（絵文字 / 称号名 / 1〜4）")
+    async def 購入(self, interaction: discord.Interaction, 内容: str):
+        uid = interaction.user.id
+        balance = get_balance(uid)
+
+        # ショップ有効確認
+        if uid not in active_shops:
+            await interaction.response.send_message(
+                "`/a3_ショップ open` を開いた状態でのみ購入できます。\n"
+                "再度 `/a3_ショップ open` を実行してください。",
+                ephemeral=True
+            )
+            return
+
+        old_name = interaction.user.display_name
+        clean_name = old_name
+        clean_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", clean_name)
+        clean_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", clean_name)
+        clean_name = re.sub(r"^\[.*?\]\s*", "", clean_name).strip()
+
+        current_title = None
+        current_decoration = None
+        m_title = re.search(r"\[(.*?)\]", old_name)
+        if m_title:
+            current_title = m_title.group(1)
+        m_deco = re.match(r"(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])", old_name)
+        if m_deco:
+            current_decoration = m_deco.group(1)
+
+        # --- 装飾購入 ---
+        if is_emoji(内容):
+            cost = 1000
+            if balance < cost:
+                await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+                return
+
+            new_name = f"{内容} "
+            if current_title:
+                new_name += f"[{current_title}] "
+            new_name += f"{clean_name} {内容}"
+
+            add_gold(uid, -cost)
+            await interaction.user.edit(nick=new_name.strip())
+            await interaction.response.send_message(f"✨ 装飾を変更しました！ → {new_name}", ephemeral=True)
             del active_shops[uid]
-        return
-
-    # --- 称号購入 ---
-    elif not 内容.isdigit():
-        cost = 3000
-        if balance < cost:
-            await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
             return
 
-        new_title = 内容
-        new_name = ""
-        if current_decoration:
-            new_name += f"{current_decoration} "
-        new_name += f"[{new_title}] {clean_name}"
-        if current_decoration:
-            new_name += f" {current_decoration}"
+        # --- 称号購入 ---
+        elif not 内容.isdigit():
+            cost = 3000
+            if balance < cost:
+                await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+                return
 
-        add_gold(uid, -cost)
-        await interaction.user.edit(nick=new_name.strip())
-        await interaction.response.send_message(f"称号を変更しました！ → {new_name}", ephemeral=True)
+            new_name = ""
+            if current_decoration:
+                new_name += f"{current_decoration} "
+            new_name += f"[{内容}] {clean_name}"
+            if current_decoration:
+                new_name += f" {current_decoration}"
 
-        if uid in active_shops:
+            add_gold(uid, -cost)
+            await interaction.user.edit(nick=new_name.strip())
+            await interaction.response.send_message(f"🏷️ 称号を変更しました！ → {new_name}", ephemeral=True)
             del active_shops[uid]
-        return
-
-    # --- ロール購入 ---
-    else:
-        num = int(内容)
-        roles = {
-            1: ("🔥火属性🔥", 500),
-            2: ("💧水属性💧", 500),
-            3: ("🌪️風属性🌪️", 500),
-            4: ("🌱土属性🌱", 500)
-        }
-        if num not in roles:
-            await interaction.response.send_message("存在しない番号です。", ephemeral=True)
             return
 
-        role_name, cost = roles[num]
-        if balance < cost:
-            await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
-            return
+        # --- ロール購入 ---
+        else:
+            try:
+                num = int(内容)
+            except ValueError:
+                await interaction.response.send_message(
+                    "入力が不正です。`絵文字 / 称号名 / 1〜4` のいずれかを指定してください。",
+                    ephemeral=True
+                )
+                return
 
-        add_gold(uid, -cost)
-        role = discord.utils.get(interaction.guild.roles, name=role_name)
-        if not role:
-            role = await interaction.guild.create_role(name=role_name)
-        await interaction.user.add_roles(role)
-        await interaction.response.send_message(f"{role_name} ロールを購入しました！", ephemeral=True)
+            roles = {
+                1: ("🔥火属性🔥", 500),
+                2: ("💧水属性💧", 500),
+                3: ("🌪️風属性🌪️", 500),
+                4: ("🌱土属性🌱", 500)
+            }
+            if num not in roles:
+                await interaction.response.send_message("存在しない番号です。", ephemeral=True)
+                return
 
-        if uid in active_shops:
+            role_name, cost = roles[num]
+            if balance < cost:
+                await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+                return
+
+            add_gold(uid, -cost)
+            role = discord.utils.get(interaction.guild.roles, name=role_name)
+            if not role:
+                role = await interaction.guild.create_role(name=role_name)
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ {role_name} ロールを購入しました！", ephemeral=True)
             del active_shops[uid]
-        return
+
+
+# グループ登録
+bot.tree.add_command(ShopGroup())
 
 
 
-#------------------------------------------------------------------------------------------------------------
-
-
-
-# ===== /a4_リセット =====
+# ------------------------------------------------------------------------------------------------------------
+# ===== /a4_リセット（装飾 / 称号 / ロール） =====
 @bot.tree.command(name="a4_リセット", description="購入した装飾・称号・ロールを削除します")
 @app_commands.describe(種類="リセットする項目を選択")
 @app_commands.choices(種類=[
@@ -804,43 +725,38 @@ async def buy(interaction: discord.Interaction, 内容: str):
     app_commands.Choice(name="称号リセット", value="称号"),
     app_commands.Choice(name="ロールリセット", value="ロール"),
 ])
-async def reset_items(interaction: discord.Interaction, 種類: app_commands.Choice[str]):
+async def a4_reset_items(interaction: discord.Interaction, 種類: app_commands.Choice[str]):
     choice = 種類.value
     user = interaction.user
     old_name = user.display_name
     new_name = old_name
 
-    # ===== 装飾リセット =====
+    # 装飾リセット
     if choice == "装飾":
         new_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", new_name)
         new_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", new_name)
         new_name = new_name.strip()
         try:
             await user.edit(nick=new_name)
-            await interaction.response.send_message(
-                f"装飾をリセットしました！ → `{new_name}`", ephemeral=True
-            )
+            await interaction.response.send_message(f"装飾をリセットしました → `{new_name}`", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("ニックネームを変更する権限がありません。", ephemeral=True)
         return
 
-    # ===== 称号リセット =====
-    elif choice == "称号":
+    # 称号リセット
+    if choice == "称号":
         new_name = re.sub(r"^\[.*?\]\s*", "", new_name).strip()
         try:
             await user.edit(nick=new_name)
-            await interaction.response.send_message(
-                f"称号をリセットしました！ → `{new_name}`", ephemeral=True
-            )
+            await interaction.response.send_message(f"称号をリセットしました → `{new_name}`", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("ニックネームを変更する権限がありません。", ephemeral=True)
         return
 
-    # ===== ロールリセット =====
-    elif choice == "ロール":
+    # ロールリセット
+    if choice == "ロール":
         removed_roles = []
         role_names = ["🔥火属性🔥", "💧水属性💧", "🌪️風属性🌪️", "🌱土属性🌱"]
-
         for name in role_names:
             role = discord.utils.get(interaction.guild.roles, name=name)
             if role and role in user.roles:
@@ -851,27 +767,19 @@ async def reset_items(interaction: discord.Interaction, 種類: app_commands.Cho
                     pass
 
         if removed_roles:
-            await interaction.response.send_message(
-                f"ロールをリセットしました：{', '.join(removed_roles)}", ephemeral=True
-            )
+            await interaction.response.send_message(f"ロールをリセットしました：{', '.join(removed_roles)}", ephemeral=True)
         else:
             await interaction.response.send_message("リセット対象のロールが見つかりませんでした。", ephemeral=True)
         return
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
+# ------------------------------------------------------------------------------------------------------------
 # ===== リマインド =====
 @bot.tree.command(name="c1_リマインド", description="指定した時間または日付＋時間にリマインドを送ります（日本時間）")
 @app_commands.describe(時間または分後="「21:30」「11/03 21:30」または「15」など", メッセージ="リマインド内容")
-async def remind(interaction: discord.Interaction, 時間または分後: str, メッセージ: str):
+async def c1_remind(interaction: discord.Interaction, 時間または分後: str, メッセージ: str):
     await interaction.response.defer(ephemeral=True)
     now = datetime.now(JST)
-    remind_time = None
-    wait_seconds = None
 
     if re.fullmatch(r"\d+", 時間または分後):
         minutes = int(時間または分後)
@@ -894,6 +802,7 @@ async def remind(interaction: discord.Interaction, 時間または分後: str, �
         return
 
     remind_id = f"{interaction.user.id}-{remind_time.strftime('%Y%m%d%H%M%S')}"
+
     async def remind_task():
         try:
             await asyncio.sleep(wait_seconds)
@@ -912,13 +821,13 @@ async def remind(interaction: discord.Interaction, 時間または分後: str, �
 
     task = asyncio.create_task(remind_task())
     reminders[remind_id] = {"task": task, "time": remind_time, "message": メッセージ}
-    view = None
 
     class CancelButton(discord.ui.View):
         def __init__(self, user_id: int, remind_id: str):
             super().__init__(timeout=None)
             self.user_id = user_id
             self.remind_id = remind_id
+
         @discord.ui.button(label="リマインドを削除", style=discord.ButtonStyle.danger)
         async def cancel_button(self, interaction2: discord.Interaction, button: discord.ui.Button):
             if interaction2.user.id != self.user_id:
@@ -932,14 +841,14 @@ async def remind(interaction: discord.Interaction, 時間または分後: str, �
                 await interaction2.response.send_message("このリマインドはすでに削除されています。", ephemeral=True)
 
     view = CancelButton(interaction.user.id, remind_id)
-    await interaction.followup.send(f"リマインドを設定しました：{remind_time.strftime('%m/%d %H:%M')}\n> {メッセージ}", view=view, ephemeral=True)
+    await interaction.followup.send(
+        f"リマインドを設定しました：{remind_time.strftime('%m/%d %H:%M')}\n> {メッセージ}",
+        view=view,
+        ephemeral=True
+    )
 
 
-
-#------------------------------------------------------------------------------------------------------------
-
-
-
+# ------------------------------------------------------------------------------------------------------------
 # ===== 起動 =====
 @bot.event
 async def on_ready():
