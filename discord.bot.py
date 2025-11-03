@@ -537,172 +537,207 @@ async def a2_send_gold(interaction: discord.Interaction, 相手: discord.Member,
 
 
 # ------------------------------------------------------------------------------------------------------------
-# ===== ショップ（/a3_ショップ → /a3_ショップ 購入 連動） =====
+# ===== /a3_ショップ =====
+@bot.tree.command(name="a3_ショップ", description="GOLDで商品を購入できます")
+@app_commands.describe(カテゴリ="ショップカテゴリを選択")
+@app_commands.choices(カテゴリ=[
+    app_commands.Choice(name="装飾", value="装飾"),
+    app_commands.Choice(name="称号", value="称号"),
+    app_commands.Choice(name="ロール", value="ロール")
+])
+async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.Choice[str]):
+    balance = get_balance(interaction.user.id)
+    cat = カテゴリ.value
 
-# ショップ状態記録：ユーザーごとに「表示中のエフェメラル」を有効扱いにする
-active_shops = {}  # {user_id: message_id}
-
-# -----------------------------------------------
-# ショップ機能をグループ化して「/a3_ショップ 購入」を非表示化
-# -----------------------------------------------
-class ShopGroup(app_commands.Group):
-    def __init__(self):
-        super().__init__(name="a3_ショップ", description="GOLDで商品を購入できます")
-
-    # ===== /a3_ショップ open =====
-    @app_commands.command(name="open", description="ショップを開きます")
-    @app_commands.describe(カテゴリ="ショップカテゴリを選択")
-    @app_commands.choices(カテゴリ=[
-        app_commands.Choice(name="装飾", value="装飾"),
-        app_commands.Choice(name="称号", value="称号"),
-        app_commands.Choice(name="ロール", value="ロール"),
-    ])
-    async def open(self, interaction: discord.Interaction, カテゴリ: app_commands.Choice[str]):
-        balance = get_balance(interaction.user.id)
-        cat = カテゴリ.value
-
-        if cat == "装飾":
-            msg = (
-                f"**装飾ショップへようこそ！**\n"
-                "好きな絵文字で名前を装飾できます！\n"
-                "例：🔥[称号] あなたの名前🔥\n\n"
-                "価格：**1000 GOLD**\n"
-                "購入方法：`/a3_ショップ 購入 絵文字`\n"
-                f"（あなたの所持GOLD：**{balance} GOLD**）"
+    # ==========================
+    # 装飾ショップ
+    # ==========================
+    if cat == "装飾":
+        class DecoModal(discord.ui.Modal, title="装飾購入"):
+            emoji_input = discord.ui.TextInput(
+                label="好きな絵文字を入力（例：🔥、💎、カスタム絵文字も可能）",
+                style=discord.TextStyle.short,
+                required=True
             )
-        elif cat == "称号":
-            msg = (
-                f"**称号ショップへようこそ！**\n"
-                "称号は **[称号]** 形式で付与されます。\n"
-                "装飾と同時に付与されている場合、`絵文字 [称号] 名前 絵文字` の並びになります。\n\n"
-                "価格：**3000 GOLD**\n"
-                "購入方法：`/a3_ショップ 購入 称号名`\n"
-                f"（あなたの所持GOLD：**{balance} GOLD**）"
+
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                uid = modal_interaction.user.id
+                内容 = self.emoji_input.value.strip()
+                balance = get_balance(uid)
+
+                if not is_emoji(内容):
+                    await modal_interaction.response.send_message("無効な絵文字です。", ephemeral=True)
+                    return
+                if balance < 1000:
+                    await modal_interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+                    return
+
+                old_name = modal_interaction.user.display_name
+                clean = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", old_name)
+                clean = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", clean)
+                clean = re.sub(r"^\[.*?\]\s*", "", clean).strip()
+
+                title_match = re.search(r"\[(.*?)\]", old_name)
+                current_title = title_match.group(1) if title_match else None
+
+                new_name = f"{内容} "
+                if current_title:
+                    new_name += f"[{current_title}] "
+                new_name += f"{clean} {内容}"
+
+                add_gold(uid, -1000)
+                await modal_interaction.user.edit(nick=new_name.strip())
+                await modal_interaction.response.send_message(f"装飾を変更しました！ → {new_name}", ephemeral=True)
+
+        class DecoButton(discord.ui.Button):
+            def __init__(self):
+                super().__init__(label="装飾購入", style=discord.ButtonStyle.primary)
+
+            async def callback(self, button_interaction: discord.Interaction):
+                modal = DecoModal()
+                await button_interaction.response.send_modal(modal)
+                self.disabled = True
+                await button_interaction.message.edit(view=self.view)
+
+        view = discord.ui.View()
+        view.add_item(DecoButton())
+
+        msg = (
+            f"**ようこそ！装飾ショップへ！**\n"
+            "「🔥名前🔥」のようにあなたの名前を絵文字で装飾できます。\n\n"
+            "**価格：1000 GOLD**\n"
+            f"（あなたの所持：{balance} GOLD）"
+        )
+        await interaction.response.send_message(msg, view=view, ephemeral=True)
+
+    # ==========================
+    # 称号ショップ
+    # ==========================
+    elif cat == "称号":
+        class TitleModal(discord.ui.Modal, title="称号購入"):
+            title_input = discord.ui.TextInput(
+                label="付けたい称号を入力（例：勇者、伝説の竜騎士 など）",
+                style=discord.TextStyle.short,
+                required=True
             )
-        elif cat == "ロール":
-            msg = (
-                f"**ロールショップへようこそ！**\n"
-                "GOLDで好きな属性ロールを購入できます！\n\n"
-                "1 🔥火属性🔥　500 GOLD\n"
-                "2 💧水属性💧　500 GOLD\n"
-                "3 🌪️風属性🌪️　500 GOLD\n"
-                "4 🌱土属性🌱　500 GOLD\n\n"
-                "購入方法：`/a3_ショップ 購入 番号`\n"
-                f"（あなたの所持GOLD：**{balance} GOLD**）"
+
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                uid = modal_interaction.user.id
+                内容 = self.title_input.value.strip()
+                balance = get_balance(uid)
+
+                if balance < 3000:
+                    await modal_interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+                    return
+
+                old_name = modal_interaction.user.display_name
+                clean = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", old_name)
+                clean = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", clean)
+                clean = re.sub(r"^\[.*?\]\s*", "", clean).strip()
+
+                deco_match = re.match(r"(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])", old_name)
+                current_deco = deco_match.group(1) if deco_match else None
+
+                new_name = ""
+                if current_deco:
+                    new_name += f"{current_deco} "
+                new_name += f"[{内容}] {clean}"
+                if current_deco:
+                    new_name += f" {current_deco}"
+
+                add_gold(uid, -3000)
+                await modal_interaction.user.edit(nick=new_name.strip())
+                await modal_interaction.response.send_message(f"称号を変更しました！ → {new_name}", ephemeral=True)
+
+        class TitleButton(discord.ui.Button):
+            def __init__(self):
+                super().__init__(label="称号購入", style=discord.ButtonStyle.success)
+
+            async def callback(self, button_interaction: discord.Interaction):
+                modal = TitleModal()
+                await button_interaction.response.send_modal(modal)
+                self.disabled = True
+                await button_interaction.message.edit(view=self.view)
+
+        view = discord.ui.View()
+        view.add_item(TitleButton())
+
+        msg = (
+            f"**ようこそ！称号ショップへ！**\n"
+            "「[称号] 名前」のように称号を付けられます。\n\n"
+            "**価格：3000 GOLD**\n"
+            f"（あなたの所持：{balance} GOLD）"
+        )
+        await interaction.response.send_message(msg, view=view, ephemeral=True)
+
+    # ==========================
+    # ロールショップ
+    # ==========================
+    elif cat == "ロール":
+        class RoleModal(discord.ui.Modal, title="ロール購入"):
+            num_input = discord.ui.TextInput(
+                label="購入したいロール番号を入力（1〜4）",
+                style=discord.TextStyle.short,
+                required=True
             )
-        else:
-            await interaction.response.send_message("存在しないカテゴリです。", ephemeral=True)
-            return
 
-        # ショップをアクティブに
-        await interaction.response.send_message(msg, ephemeral=True)
-        sent_message = await interaction.original_response()
-        active_shops[interaction.user.id] = sent_message.id
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                uid = modal_interaction.user.id
+                balance = get_balance(uid)
 
-        # 3分後に自動無効化
-        async def expire_shop():
-            await asyncio.sleep(180)
-            if interaction.user.id in active_shops and active_shops[interaction.user.id] == sent_message.id:
-                del active_shops[interaction.user.id]
+                try:
+                    num = int(self.num_input.value.strip())
+                except ValueError:
+                    await modal_interaction.response.send_message("数字を入力してください。", ephemeral=True)
+                    return
 
-        asyncio.create_task(expire_shop())
+                roles = {
+                    1: ("🔥火属性🔥", 500),
+                    2: ("💧水属性💧", 500),
+                    3: ("🌪️風属性🌪️", 500),
+                    4: ("🌱土属性🌱", 500)
+                }
 
-    # ===== /a3_ショップ 購入（非表示化設定） =====
-    @app_commands.command(name="購入", description="（内部コマンド）ショップ内でのみ動作します")
-    @app_commands.describe(内容="購入内容（絵文字 / 称号名 / 1〜4）")
-    @app_commands.default_permissions()  # 権限無し → 一般表示抑制
-    @app_commands.checks.has_permissions(administrator=True)  # 管理者専用扱いでリスト非表示
-    async def 購入(self, interaction: discord.Interaction, 内容: str):
-        # 通常入力では即ブロック
-        if interaction.user.id not in active_shops:
-            await interaction.response.send_message(
-                "このコマンドは `/a3_ショップ open` 実行中のみ使用できます。",
-                ephemeral=True
-            )
-            return
+                if num not in roles:
+                    await modal_interaction.response.send_message("1〜4の番号を入力してください。", ephemeral=True)
+                    return
 
-        # --- ここから下は購入処理（既存ロジック） ---
-        uid = interaction.user.id
-        balance = get_balance(uid)
-        old_name = interaction.user.display_name
+                role_name, cost = roles[num]
+                if balance < cost:
+                    await modal_interaction.response.send_message("GOLDが足りません。", ephemeral=True)
+                    return
 
-        clean_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", old_name)
-        clean_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", clean_name)
-        clean_name = re.sub(r"^\[.*?\]\s*", "", clean_name).strip()
+                add_gold(uid, -cost)
+                role = discord.utils.get(modal_interaction.guild.roles, name=role_name)
+                if not role:
+                    role = await modal_interaction.guild.create_role(name=role_name)
+                await modal_interaction.user.add_roles(role)
+                await modal_interaction.response.send_message(f"{role_name} を購入しました！", ephemeral=True)
 
-        m_title = re.search(r"\[(.*?)\]", old_name)
-        m_deco = re.match(r"(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])", old_name)
-        current_title = m_title.group(1) if m_title else None
-        current_decoration = m_deco.group(1) if m_deco else None
+        class RoleButton(discord.ui.Button):
+            def __init__(self):
+                super().__init__(label="ロール購入", style=discord.ButtonStyle.primary)
 
-        # 装飾
-        if is_emoji(内容):
-            cost = 1000
-            if balance < cost:
-                await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
-                return
-            new_name = f"{内容} "
-            if current_title:
-                new_name += f"[{current_title}] "
-            new_name += f"{clean_name} {内容}"
-            add_gold(uid, -cost)
-            await interaction.user.edit(nick=new_name.strip())
-            await interaction.response.send_message(f"装飾を変更しました！ → {new_name}", ephemeral=True)
-            del active_shops[uid]
-            return
+            async def callback(self, button_interaction: discord.Interaction):
+                modal = RoleModal()
+                await button_interaction.response.send_modal(modal)
+                self.disabled = True
+                await button_interaction.message.edit(view=self.view)
 
-        # 称号
-        elif not 内容.isdigit():
-            cost = 3000
-            if balance < cost:
-                await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
-                return
-            new_name = ""
-            if current_decoration:
-                new_name += f"{current_decoration} "
-            new_name += f"[{内容}] {clean_name}"
-            if current_decoration:
-                new_name += f" {current_decoration}"
-            add_gold(uid, -cost)
-            await interaction.user.edit(nick=new_name.strip())
-            await interaction.response.send_message(f"称号を変更しました！ → {new_name}", ephemeral=True)
-            del active_shops[uid]
-            return
+        view = discord.ui.View()
+        view.add_item(RoleButton())
 
-        # ロール
-        else:
-            try:
-                num = int(内容)
-            except ValueError:
-                await interaction.response.send_message(
-                    "入力が不正です。`絵文字 / 称号名 / 1〜4` のいずれかを指定してください。",
-                    ephemeral=True
-                )
-                return
-            roles = {
-                1: ("🔥火属性🔥", 500),
-                2: ("💧水属性💧", 500),
-                3: ("🌪️風属性🌪️", 500),
-                4: ("🌱土属性🌱", 500)
-            }
-            if num not in roles:
-                await interaction.response.send_message("存在しない番号です。", ephemeral=True)
-                return
-            role_name, cost = roles[num]
-            if balance < cost:
-                await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
-                return
-            add_gold(uid, -cost)
-            role = discord.utils.get(interaction.guild.roles, name=role_name)
-            if not role:
-                role = await interaction.guild.create_role(name=role_name)
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"{role_name} ロールを購入しました！", ephemeral=True)
-            del active_shops[uid]
-
-
-# グループ登録
-bot.tree.add_command(ShopGroup())
+        msg = (
+            f"**ようこそ！ロールショップへ！**\n"
+            "\n"
+            "1 🔥火属性🔥　500 GOLD\n"
+            "2 💧水属性💧　500 GOLD\n"
+            "3 🌪️風属性🌪️　500 GOLD\n"
+            "4 🌱土属性🌱　500 GOLD\n\n"
+            "\n"
+            f"（あなたの所持：{balance} GOLD）"
+        )
+        await interaction.response.send_message(msg, view=view, ephemeral=True)
 
 
 
