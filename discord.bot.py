@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import asyncio, json, os, re, time
 from datetime import datetime, timedelta, timezone
+from datetime import time as dtime
 from keep_alive import keep_alive
 import feedparser
 
@@ -65,6 +66,12 @@ def save_feeds():
     with open(FEEDS_FILE, "w", encoding="utf-8") as f:
         json.dump(tracking_feeds, f, ensure_ascii=False, indent=4)
 
+
+
+#------------------------------------------------------------------------------------------------------------
+
+
+
 # ===== Communication Level 設定 =====
 CL_LEVELS = [
     {"name": "Communication Level 1", "text": 10, "vc": 30, "color": 0x999999},
@@ -81,16 +88,30 @@ async def on_voice_state_update(member, before, after):
     if not cl_data.get("enabled"):
         return
     user_id = str(member.id)
+
+    # 入室時刻を記録
     if before.channel is None and after.channel is not None:
         voice_sessions[user_id] = time.time()
+
+    # 退出時に滞在時間を加算
     elif before.channel is not None and after.channel is None:
         if user_id in voice_sessions:
             duration = int((time.time() - voice_sessions[user_id]) / 60)
             del voice_sessions[user_id]
+
+            # Communication Levelデータ更新
             if user_id not in cl_data["users"]:
                 cl_data["users"][user_id] = {"text": 0, "vc": 0}
             cl_data["users"][user_id]["vc"] += duration
             save_data()
+
+            # 🔸 VC滞在報酬：1分につき5GOLD
+            if duration > 0:
+                try:
+                    add_gold(member.id, duration * 5)
+                except Exception as e:
+                    print(f"VC報酬付与エラー: {e}")
+
             await check_and_assign_roles(member)
 
 # ===== ロール付与処理 =====
@@ -320,16 +341,23 @@ async def a3_pin_stop(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("このチャンネルにはピン留めが設定されていません。", ephemeral=True)
 
-# ===== 統合 on_message（CLカウント + ピン留め維持） =====
+# ===== 統合 on_message（CLカウント + ピン留め維持 + チャット報酬） =====
 @bot.event
 async def on_message(message: discord.Message):
-    # Bot自身には反応しない
     if message.author.bot:
         return
 
     channel_id = str(message.channel.id)
 
-    # ピン留め（テンプレ）維持
+    # 🔸 チャット報酬：2文字につき1GOLD
+    try:
+        gain = len(message.content) // 2
+        if gain > 0:
+            add_gold(message.author.id, gain)
+    except Exception as e:
+        print(f"チャット報酬付与エラー: {e}")
+
+    # ピン留めテンプレ維持
     if channel_id in auto_templates:
         template_text = auto_templates[channel_id]
         if channel_id in last_template_messages:
@@ -413,10 +441,6 @@ async def a5_xpost_stop(interaction: discord.Interaction):
 
 
 # ===== Goldシステム（通貨 + ショップ） =====
-import discord
-from discord import app_commands
-from discord.ext import commands
-import json, os
 
 GOLD_FILE = "gold_data.json"
 SHOP_CATEGORIES = ["装飾", "称号", "ロール"]
@@ -443,9 +467,50 @@ def add_gold(user_id: int, amount: int):
     gold_data[uid] = gold_data.get(uid, 0) + amount
     save_gold(gold_data)
 
-# --- Bot設定 ---
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+@tasks.loop(time=dtime(hour=0, minute=0, tzinfo=JST))
+async def daily_gold_distribution():
+    count = 0
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.bot:
+                continue
+            add_gold(member.id, 100)
+            count += 1
+    print(f"[{datetime.now(JST).strftime('%m/%d %H:%M')}] 🎁 毎日配布完了: {count}ユーザーに100 GOLD付与")
+
+
+
+# ===== 新規参加者へ自動10000GOLD付与 =====
+@bot.event
+async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+    try:
+        add_gold(member.id, 10000)
+        print(f"[JOIN] {member.display_name} に10000 GOLDを付与しました。")
+    except Exception as e:
+        print(f"新規メンバー初期GOLD付与エラー: {e}")
+
+
+# ===== 既存メンバーへ一括10000GOLD付与（初回起動時のみ） =====
+async def distribute_initial_gold():
+    FLAG_FILE = "initial_gold_flag.json"
+    if os.path.exists(FLAG_FILE):
+        return  # すでに配布済みならスキップ
+
+    count = 0
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.bot:
+                continue
+            add_gold(member.id, 10000)
+            count += 1
+
+    with open(FLAG_FILE, "w", encoding="utf-8") as f:
+        json.dump({"distributed": True, "count": count}, f, ensure_ascii=False, indent=4)
+
+    print(f"💰 初回ボーナス: 既存メンバー {count} 名に10000 GOLDを配布しました。")
+
 
 
 # ===== /a1_残高確認 =====
@@ -456,6 +521,7 @@ async def check_gold(interaction: discord.Interaction):
         f"あなたの所持GOLDは **{balance} GOLD** です💰",
         ephemeral=True
     )
+
 
 
 # ===== /a2_送金 =====
@@ -487,6 +553,7 @@ async def send_gold(interaction: discord.Interaction, 相手: discord.Member, �
         f"{相手.display_name} に **{金額} GOLD** を送金しました💸",
         ephemeral=True
     )
+
 
 
 # ===== /a3_ショップ =====
@@ -547,7 +614,7 @@ async def buy(interaction: discord.Interaction, 内容: str):
     balance = get_balance(interaction.user.id)
 
     # --- 装飾 ---
-    if 内容.startswith(("🔥", "💧", "🌸", "🌟", "🖤", "💀", "✨")):
+    if 内容.startswith(("🔥", "💧", "🌸", "🌟", "🖤", "💀", "✨", "<:", "<a:")):
         cost = 1000
         if balance < cost:
             await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
@@ -690,6 +757,10 @@ async def on_ready():
     print(f"Communication Level: {'ON' if cl_data['enabled'] else 'OFF'}")
     if not check_feeds.is_running():
         check_feeds.start()
+    if not daily_gold_distribution.is_running():
+        daily_gold_distribution.start()
+    await distribute_initial_gold()
+
 
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
