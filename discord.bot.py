@@ -134,14 +134,14 @@ async def check_and_assign_roles(member: discord.Member):
                 print(f"{member.display_name} から {level['name']} を削除しました")
 
 # ===== ON/OFFコマンド =====
-@bot.tree.command(name="Z1_CL_ON", description="Communication Level機能をONにします（管理者のみ）")
+@bot.tree.command(name="z1_cl_on", description="Communication Level機能をONにします（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def a1_cl(interaction: discord.Interaction):
     cl_data["enabled"] = True
     save_data()
     await interaction.response.send_message("Communication Level機能をONにしました。", ephemeral=True)
 
-@bot.tree.command(name="Z2_CL_OFF", description="Communication Level機能をOFFにします（管理者のみ）")
+@bot.tree.command(name="z2_cl_off", description="Communication Level機能をOFFにします（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def a2_cl(interaction: discord.Interaction):
     cl_data["enabled"] = False
@@ -152,7 +152,7 @@ async def a2_cl(interaction: discord.Interaction):
 
 # ===== ロール付与メッセージ機能 =====
 @bot.tree.command(
-    name="A1_ロール付与メッセージ",
+    name="a1_ロール付与メッセージ",
     description="ボタンでロールを付与するメッセージを作成します（管理者のみ）"
 )
 @app_commands.describe(
@@ -236,7 +236,7 @@ last_template_messages = {}  # {channel_id: message_id}
 
 
 # --- 設定コマンド ---
-@bot.tree.command(name="A2ピン留め設定", description="このチャンネルにピン留めを設定します（管理者のみ）")
+@bot.tree.command(name="a2ピン留め設定", description="このチャンネルにピン留めを設定します（管理者のみ）")
 @app_commands.describe(メッセージ="ピン留め内容")
 @app_commands.default_permissions(administrator=True)
 async def set_template(interaction: discord.Interaction, メッセージ: str):
@@ -247,7 +247,7 @@ async def set_template(interaction: discord.Interaction, メッセージ: str):
 
 
 # --- 停止コマンド ---
-@bot.tree.command(name="A3ピン留め停止", description="このチャンネルのピン留めを停止します（管理者のみ）")
+@bot.tree.command(name="a3ピン留め停止", description="このチャンネルのピン留めを停止します（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def stop_template(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
@@ -316,7 +316,7 @@ async def check_feeds():
             save_feeds()
             await channel.send(latest_link)
 
-@bot.tree.command(name="A4_Xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります（管理者のみ）")
+@bot.tree.command(name="a4_Xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります（管理者のみ）")
 @app_commands.describe(アカウント名="例：elonmusk")
 @app_commands.default_permissions(administrator=True)
 async def x_post(interaction: discord.Interaction, アカウント名: str):
@@ -328,7 +328,7 @@ async def x_post(interaction: discord.Interaction, アカウント名: str):
     await interaction.response.send_message(f"@{アカウント名} の投稿監視を開始しました。", ephemeral=True)
 
 # ===== Xポスト停止コマンド =====
-@bot.tree.command(name="A5_Xポスト停止", description="このチャンネルでのXポスト監視を停止します（管理者のみ）")
+@bot.tree.command(name="a5_Xポスト停止", description="このチャンネルでのXポスト監視を停止します（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def x_post_stop(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
