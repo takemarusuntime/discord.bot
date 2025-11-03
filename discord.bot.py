@@ -316,7 +316,7 @@ async def check_feeds():
             save_feeds()
             await channel.send(latest_link)
 
-@bot.tree.command(name="a4_Xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります（管理者のみ）")
+@bot.tree.command(name="a4_xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります（管理者のみ）")
 @app_commands.describe(アカウント名="例：elonmusk")
 @app_commands.default_permissions(administrator=True)
 async def x_post(interaction: discord.Interaction, アカウント名: str):
@@ -328,7 +328,7 @@ async def x_post(interaction: discord.Interaction, アカウント名: str):
     await interaction.response.send_message(f"@{アカウント名} の投稿監視を開始しました。", ephemeral=True)
 
 # ===== Xポスト停止コマンド =====
-@bot.tree.command(name="a5_Xポスト停止", description="このチャンネルでのXポスト監視を停止します（管理者のみ）")
+@bot.tree.command(name="a5_xポスト停止", description="このチャンネルでのXポスト監視を停止します（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def x_post_stop(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
