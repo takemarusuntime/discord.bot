@@ -543,7 +543,7 @@ async def a2_send_gold(interaction: discord.Interaction, 相手: discord.Member,
 active_shops = {}  # {user_id: message_id}
 
 # -----------------------------------------------
-# ショップ機能をグループ化して /購入 を非表示にする
+# ショップ機能をグループ化して「/a3_ショップ 購入」を非表示化
 # -----------------------------------------------
 class ShopGroup(app_commands.Group):
     def __init__(self):
@@ -594,12 +594,12 @@ class ShopGroup(app_commands.Group):
             await interaction.response.send_message("存在しないカテゴリです。", ephemeral=True)
             return
 
-        # エフェメラル表示 & 有効化
+        # ショップをアクティブに
         await interaction.response.send_message(msg, ephemeral=True)
         sent_message = await interaction.original_response()
         active_shops[interaction.user.id] = sent_message.id
 
-        # 3分で自動無効化
+        # 3分後に自動無効化
         async def expire_shop():
             await asyncio.sleep(180)
             if interaction.user.id in active_shops and active_shops[interaction.user.id] == sent_message.id:
@@ -607,76 +607,69 @@ class ShopGroup(app_commands.Group):
 
         asyncio.create_task(expire_shop())
 
-    # ===== /a3_ショップ 購入 =====
-    @app_commands.command(name="購入", description="ショップ内の商品を購入します（ショップ開封中のみ有効）")
+    # ===== /a3_ショップ 購入（非表示化設定） =====
+    @app_commands.command(name="購入", description="（内部コマンド）ショップ内でのみ動作します")
     @app_commands.describe(内容="購入内容（絵文字 / 称号名 / 1〜4）")
+    @app_commands.default_permissions()  # 権限無し → 一般表示抑制
+    @app_commands.checks.has_permissions(administrator=True)  # 管理者専用扱いでリスト非表示
     async def 購入(self, interaction: discord.Interaction, 内容: str):
-        uid = interaction.user.id
-        balance = get_balance(uid)
-
-        # ショップ有効確認
-        if uid not in active_shops:
+        # 通常入力では即ブロック
+        if interaction.user.id not in active_shops:
             await interaction.response.send_message(
-                "`/a3_ショップ open` を開いた状態でのみ購入できます。\n"
-                "再度 `/a3_ショップ open` を実行してください。",
+                "このコマンドは `/a3_ショップ open` 実行中のみ使用できます。",
                 ephemeral=True
             )
             return
 
+        # --- ここから下は購入処理（既存ロジック） ---
+        uid = interaction.user.id
+        balance = get_balance(uid)
         old_name = interaction.user.display_name
-        clean_name = old_name
-        clean_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", clean_name)
+
+        clean_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", old_name)
         clean_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", clean_name)
         clean_name = re.sub(r"^\[.*?\]\s*", "", clean_name).strip()
 
-        current_title = None
-        current_decoration = None
         m_title = re.search(r"\[(.*?)\]", old_name)
-        if m_title:
-            current_title = m_title.group(1)
         m_deco = re.match(r"(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])", old_name)
-        if m_deco:
-            current_decoration = m_deco.group(1)
+        current_title = m_title.group(1) if m_title else None
+        current_decoration = m_deco.group(1) if m_deco else None
 
-        # --- 装飾購入 ---
+        # 装飾
         if is_emoji(内容):
             cost = 1000
             if balance < cost:
                 await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
                 return
-
             new_name = f"{内容} "
             if current_title:
                 new_name += f"[{current_title}] "
             new_name += f"{clean_name} {内容}"
-
             add_gold(uid, -cost)
             await interaction.user.edit(nick=new_name.strip())
-            await interaction.response.send_message(f"✨ 装飾を変更しました！ → {new_name}", ephemeral=True)
+            await interaction.response.send_message(f"装飾を変更しました！ → {new_name}", ephemeral=True)
             del active_shops[uid]
             return
 
-        # --- 称号購入 ---
+        # 称号
         elif not 内容.isdigit():
             cost = 3000
             if balance < cost:
                 await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
                 return
-
             new_name = ""
             if current_decoration:
                 new_name += f"{current_decoration} "
             new_name += f"[{内容}] {clean_name}"
             if current_decoration:
                 new_name += f" {current_decoration}"
-
             add_gold(uid, -cost)
             await interaction.user.edit(nick=new_name.strip())
-            await interaction.response.send_message(f"🏷️ 称号を変更しました！ → {new_name}", ephemeral=True)
+            await interaction.response.send_message(f"称号を変更しました！ → {new_name}", ephemeral=True)
             del active_shops[uid]
             return
 
-        # --- ロール購入 ---
+        # ロール
         else:
             try:
                 num = int(内容)
@@ -686,7 +679,6 @@ class ShopGroup(app_commands.Group):
                     ephemeral=True
                 )
                 return
-
             roles = {
                 1: ("🔥火属性🔥", 500),
                 2: ("💧水属性💧", 500),
@@ -696,18 +688,16 @@ class ShopGroup(app_commands.Group):
             if num not in roles:
                 await interaction.response.send_message("存在しない番号です。", ephemeral=True)
                 return
-
             role_name, cost = roles[num]
             if balance < cost:
                 await interaction.response.send_message("GOLDが足りません。", ephemeral=True)
                 return
-
             add_gold(uid, -cost)
             role = discord.utils.get(interaction.guild.roles, name=role_name)
             if not role:
                 role = await interaction.guild.create_role(name=role_name)
             await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"✅ {role_name} ロールを購入しました！", ephemeral=True)
+            await interaction.response.send_message(f"{role_name} ロールを購入しました！", ephemeral=True)
             del active_shops[uid]
 
 
