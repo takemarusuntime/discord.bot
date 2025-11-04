@@ -239,49 +239,46 @@ class RoleButton(discord.ui.Button):
 
 
 # ------------------------------------------------------------------------------------------------------------
-# ===== 問い合わせチャンネル =====
+# ===== 問い合わせボタン設置コマンド =====
 @bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します（管理者のみ）")
 @app_commands.describe(
-    対象ロール="問い合わせ対応ロールを指定（例：@スタッフ）",
-    メッセージ内容="上部に表示する説明メッセージ",
-    ボタンと説明="例：『バグ報告:不具合報告はこちら』『質問:質問はこちら』（カンマ区切り）"
+    対応ロール="問い合わせに対応するロールを指定してください（例：@スタッフ）",
+    ボタン名="作成するボタン名をカンマまたは読点で区切って指定してください（例：バグ報告, 質問, 要望）",
+    メッセージ内容="ボタン上部に表示する説明メッセージを入力してください"
 )
 @app_commands.default_permissions(administrator=True)
 async def inquiry_setup(
     interaction: discord.Interaction,
-    対象ロール: discord.Role,
-    メッセージ内容: str,
-    ボタンと説明: str
+    対応ロール: discord.Role,
+    ボタン名一覧: str,
+    メッセージ内容: str
 ):
-    try:
-        pairs = [x.strip() for x in re.split("[,、]", ボタンと説明) if x.strip()]
-        button_data = []
-        for p in pairs:
-            if ":" not in p:
-                await interaction.response.send_message("入力形式が間違っています。『ボタン名:説明』の形式で指定してください。", ephemeral=True)
-                return
-            label, desc = p.split(":", 1)
-            button_data.append((label.strip(), desc.strip()))
-    except Exception as e:
-        await interaction.response.send_message(f"入力エラー: {e}", ephemeral=True)
+    labels = [x.strip() for x in re.split("[,、]", ボタン名一覧) if x.strip()]
+    if not labels:
+        await interaction.response.send_message("ボタン名が指定されていません。", ephemeral=True)
         return
 
-    view = InquiryButtonView(対象ロール, button_data)
+    view = InquiryButtonView(対応ロール, labels, メッセージ内容)
     await interaction.response.send_message("問い合わせボタンを設置しました。", ephemeral=True)
     await interaction.channel.send(メッセージ内容, view=view)
 
+
+# ===== 問い合わせボタンビュー =====
 class InquiryButtonView(discord.ui.View):
-    def __init__(self, role, button_data):
+    def __init__(self, role, labels, message):
         super().__init__(timeout=None)
         self.role = role
-        for label, desc in button_data:
-            self.add_item(InquiryButton(label=label, desc=desc, role=role))
+        self.message = message
+        for label in labels:
+            self.add_item(InquiryButton(label=label, role=role, message=message))
 
+
+# ===== 問い合わせボタン =====
 class InquiryButton(discord.ui.Button):
-    def __init__(self, label, desc, role):
+    def __init__(self, label, role, message):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
-        self.desc = desc
         self.role = role
+        self.message = message
 
     async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
@@ -303,10 +300,20 @@ class InquiryButton(discord.ui.Button):
 
         view = DeleteChannelButton()
         await new_channel.send(
-            f"{user.mention} さんの『{self.label}』用チャンネルが作成されました。\n{self.desc}",
+            f"{user.mention} さんの『{self.label}』チャンネルが作成されました。\n{self.message}",
             view=view
         )
         await interaction.response.send_message(f"チャンネルを作成しました → {new_channel.mention}", ephemeral=True)
+
+
+# ===== チャンネル削除ボタン =====
+class DeleteChannelButton(discord.ui.View):
+    @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
+    async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("このチャンネルは5秒後に削除されます。", ephemeral=True)
+        await asyncio.sleep(5)
+        await interaction.channel.delete(reason="問い合わせ完了により削除")
+
 
 class DeleteChannelButton(discord.ui.View):
     @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
@@ -314,6 +321,7 @@ class DeleteChannelButton(discord.ui.View):
         await interaction.response.send_message("このチャンネルは5秒後に削除されます。", ephemeral=True)
         await asyncio.sleep(5)
         await interaction.channel.delete(reason="問い合わせ完了により削除")
+
 
 
 # ------------------------------------------------------------------------------------------------------------
