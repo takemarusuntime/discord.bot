@@ -250,10 +250,10 @@ class RoleButton(discord.ui.Button):
 async def inquiry_setup(
     interaction: discord.Interaction,
     対応ロール: discord.Role,
-    ボタン名一覧: str,
+    ボタン名: str,
     メッセージ内容: str
 ):
-    labels = [x.strip() for x in re.split("[,、]", ボタン名一覧) if x.strip()]
+    labels = [x.strip() for x in re.split("[,、]", ボタン名) if x.strip()]
     if not labels:
         await interaction.response.send_message("ボタン名が指定されていません。", ephemeral=True)
         return
