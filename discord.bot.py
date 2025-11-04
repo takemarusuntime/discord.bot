@@ -174,7 +174,7 @@ async def z2_cl_off(interaction: discord.Interaction):
 # ===== ロール付与メッセージ機能 =====
 @bot.tree.command(
     name="x1_ロール付与メッセージ",
-    description="ボタンでロールを付与するメッセージを作成します（管理者のみ）"
+    description="ボタンでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
     メッセージ内容="表示するメッセージ",
@@ -240,11 +240,11 @@ class RoleButton(discord.ui.Button):
 
 # ------------------------------------------------------------------------------------------------------------
 # ===== 問い合わせボタン設置コマンド =====
-@bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します（管理者のみ）")
+@bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します【管理者のみ】")
 @app_commands.describe(
-    対応ロール="問い合わせに対応するロールを指定してください（例：@スタッフ）",
-    ボタン名="作成するボタン名をカンマまたは読点で区切って指定してください（例：バグ報告, 質問, 要望）",
-    メッセージ内容="ボタン上部に表示する説明メッセージを入力してください"
+    対応ロール="問い合わせに対応するロールを指定",
+    ボタン名="作成するボタン名を指定",
+    メッセージ内容="案内メッセージを入力してください"
 )
 @app_commands.default_permissions(administrator=True)
 async def inquiry_setup(
@@ -300,7 +300,8 @@ class InquiryButton(discord.ui.Button):
 
         view = DeleteChannelButton()
         await new_channel.send(
-            f"{user.mention} さんの『{self.label}』チャンネルが作成されました。\n{self.message}",
+            f"{user.mention} さんの『{self.label}』チャンネルが作成されました。\n"
+            "問い合わせをやめる場合は「チャンネルを削除する」を押してください",
             view=view
         )
         await interaction.response.send_message(f"チャンネルを作成しました → {new_channel.mention}", ephemeral=True)
@@ -326,7 +327,7 @@ class DeleteChannelButton(discord.ui.View):
 
 # ------------------------------------------------------------------------------------------------------------
 # ===== ピン留め機能 =====
-@bot.tree.command(name="x3_ピン留め設定", description="このチャンネルにピン留めを設定します（管理者のみ）")
+@bot.tree.command(name="x3_ピン留め設定", description="このチャンネルにピン留めを設定します【管理者のみ】")
 @app_commands.describe(メッセージ="ピン留め内容")
 @app_commands.default_permissions(administrator=True)
 async def pin_set(interaction: discord.Interaction, メッセージ: str):
@@ -335,7 +336,7 @@ async def pin_set(interaction: discord.Interaction, メッセージ: str):
     save_templates(auto_templates)
     await interaction.response.send_message("このチャンネルにピン留めを設定しました。", ephemeral=True)
 
-@bot.tree.command(name="x4_ピン留め停止", description="このチャンネルのピン留めを停止します（管理者のみ）")
+@bot.tree.command(name="x4_ピン留め停止", description="このチャンネルのピン留めを停止します【管理者のみ】")
 @app_commands.default_permissions(administrator=True)
 async def pin_stop(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
@@ -409,7 +410,7 @@ async def check_feeds():
             save_feeds()
             await channel.send(link)
 
-@bot.tree.command(name="x5_xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります（管理者のみ）")
+@bot.tree.command(name="x5_xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります【管理者のみ】")
 @app_commands.describe(アカウント名="例：elonmusk")
 @app_commands.default_permissions(administrator=True)
 async def x_post(interaction: discord.Interaction, アカウント名: str):
@@ -420,7 +421,7 @@ async def x_post(interaction: discord.Interaction, アカウント名: str):
         check_feeds.start()
     await interaction.response.send_message(f"@{アカウント名} の投稿監視を開始しました。", ephemeral=True)
 
-@bot.tree.command(name="x6_xポスト停止", description="このチャンネルでのXポスト監視を停止します（管理者のみ）")
+@bot.tree.command(name="x6_xポスト停止", description="このチャンネルでのXポスト監視を停止します【管理者のみ】")
 @app_commands.default_permissions(administrator=True)
 async def x_post_stop(interaction: discord.Interaction):
     cid = str(interaction.channel.id)
