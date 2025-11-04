@@ -538,7 +538,7 @@ async def a2_send_gold(interaction: discord.Interaction, 相手: discord.Member,
 
 # ------------------------------------------------------------------------------------------------------------
 # ===== /a3_ショップ =====
-@bot.tree.command(name="a3_ショップ", description="GOLDで商品を購入できます")
+@bot.tree.command(name="a3_ショップ", description="任意の装飾、称号、ロールをつけられます")
 @app_commands.describe(カテゴリ="ショップカテゴリを選択")
 @app_commands.choices(カテゴリ=[
     app_commands.Choice(name="装飾", value="装飾"),
@@ -553,9 +553,10 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
     # 装飾ショップ
     # ==========================
     if cat == "装飾":
-        class DecoModal(discord.ui.Modal, title="装飾購入"):
+        class DecoModal(discord.ui.Modal, title="装飾入力"):
             emoji_input = discord.ui.TextInput(
-                label="好きな絵文字を入力（例：🔥、💎、カスタム絵文字も可能）",
+                label="好きな絵文字を入力\n"
+                "（例：🔥、💎、カスタム絵文字も可能）",
                 style=discord.TextStyle.short,
                 required=True
             )
@@ -591,7 +592,7 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
 
         class DecoButton(discord.ui.Button):
             def __init__(self):
-                super().__init__(label="装飾購入", style=discord.ButtonStyle.primary)
+                super().__init__(label="装飾入力", style=discord.ButtonStyle.primary)
 
             async def callback(self, button_interaction: discord.Interaction):
                 modal = DecoModal()
@@ -604,9 +605,12 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
 
         msg = (
             f"**ようこそ！装飾ショップへ！**\n"
-            "「🔥名前🔥」のようにあなたの名前を絵文字で装飾できます。\n\n"
+            "「🔥名前🔥」名前を絵文字で装飾できます！\n"
+            "\n"
             "**価格：1000 GOLD**\n"
-            f"（あなたの所持：{balance} GOLD）"
+            f"（あなたの所持：{balance} GOLD）\n"
+            "\n"
+            "装飾を付ける場合は「装飾入力」ボタンを押してください"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
@@ -614,9 +618,10 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
     # 称号ショップ
     # ==========================
     elif cat == "称号":
-        class TitleModal(discord.ui.Modal, title="称号購入"):
+        class TitleModal(discord.ui.Modal, title="称号入力"):
             title_input = discord.ui.TextInput(
-                label="付けたい称号を入力（例：勇者、伝説の竜騎士 など）",
+                label="付けたい称号を入力\n"
+                "（例：勇者、伝説の竜騎士、破壊神 など）",
                 style=discord.TextStyle.short,
                 required=True
             )
@@ -651,7 +656,7 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
 
         class TitleButton(discord.ui.Button):
             def __init__(self):
-                super().__init__(label="称号購入", style=discord.ButtonStyle.success)
+                super().__init__(label="称号入力", style=discord.ButtonStyle.success)
 
             async def callback(self, button_interaction: discord.Interaction):
                 modal = TitleModal()
@@ -664,9 +669,12 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
 
         msg = (
             f"**ようこそ！称号ショップへ！**\n"
-            "「[称号] 名前」のように称号を付けられます。\n\n"
+            "「[称号] 名前」のように称号を付けられます！\n"
+            "\n"
             "**価格：3000 GOLD**\n"
-            f"（あなたの所持：{balance} GOLD）"
+            f"（あなたの所持：{balance} GOLD）\n"
+            "\n"
+            "称号を付ける場合は「称号入力」ボタンを押してください"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
@@ -733,9 +741,11 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
             "1 🔥火属性🔥　500 GOLD\n"
             "2 💧水属性💧　500 GOLD\n"
             "3 🌪️風属性🌪️　500 GOLD\n"
-            "4 🌱土属性🌱　500 GOLD\n\n"
+            "4 🌱土属性🌱　500 GOLD\n"
             "\n"
-            f"（あなたの所持：{balance} GOLD）"
+            f"（あなたの所持：{balance} GOLD）\n"
+            "\n"
+            "ロールを付ける場合は「ロール購入」ボタンを押してください"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
@@ -743,7 +753,7 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
 
 # ------------------------------------------------------------------------------------------------------------
 # ===== /a4_リセット（装飾 / 称号 / ロール） =====
-@bot.tree.command(name="a4_リセット", description="購入した装飾・称号・ロールを削除します")
+@bot.tree.command(name="a4_リセット", description="付与した装飾・称号・ロールを削除します")
 @app_commands.describe(種類="リセットする項目を選択")
 @app_commands.choices(種類=[
     app_commands.Choice(name="装飾リセット", value="装飾"),
@@ -763,7 +773,7 @@ async def a4_reset_items(interaction: discord.Interaction, 種類: app_commands.
         new_name = new_name.strip()
         try:
             await user.edit(nick=new_name)
-            await interaction.response.send_message(f"装飾をリセットしました → `{new_name}`", ephemeral=True)
+            await interaction.response.send_message(f"装飾を削除しました → `{new_name}`", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("ニックネームを変更する権限がありません。", ephemeral=True)
         return
@@ -773,7 +783,7 @@ async def a4_reset_items(interaction: discord.Interaction, 種類: app_commands.
         new_name = re.sub(r"^\[.*?\]\s*", "", new_name).strip()
         try:
             await user.edit(nick=new_name)
-            await interaction.response.send_message(f"称号をリセットしました → `{new_name}`", ephemeral=True)
+            await interaction.response.send_message(f"称号を削除しました → `{new_name}`", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("ニックネームを変更する権限がありません。", ephemeral=True)
         return
@@ -792,9 +802,9 @@ async def a4_reset_items(interaction: discord.Interaction, 種類: app_commands.
                     pass
 
         if removed_roles:
-            await interaction.response.send_message(f"ロールをリセットしました：{', '.join(removed_roles)}", ephemeral=True)
+            await interaction.response.send_message(f"ロールを削除しました：{', '.join(removed_roles)}", ephemeral=True)
         else:
-            await interaction.response.send_message("リセット対象のロールが見つかりませんでした。", ephemeral=True)
+            await interaction.response.send_message("削除対象のロールが見つかりませんでした。", ephemeral=True)
         return
 
 
