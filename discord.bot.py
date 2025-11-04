@@ -307,28 +307,50 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 
 # ------------------------------------------------------------------------------------------------------------
-# ===== 問い合わせボタン設置コマンド =====
+# ===== 問い合わせボタン設置コマンド（完全サイレント版） =====
 @bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します【管理者のみ】")
-@app_commands.describe(
-    対応ロール="問い合わせに対応するロールを指定",
-    ボタン名="作成するボタン名を指定（カンマ区切り）",
-    メッセージ内容="案内メッセージを入力してください（改行可：Shift+Enter）"
-)
 @app_commands.default_permissions(administrator=True)
-async def inquiry_setup(
-    interaction: discord.Interaction,
-    対応ロール: discord.Role,
-    ボタン名: str,
-    メッセージ内容: str
-):
-    labels = [x.strip() for x in re.split("[,、]", ボタン名) if x.strip()]
-    if not labels:
-        await interaction.response.send_message("ボタン名が指定されていません。", ephemeral=True)
-        return
+async def inquiry_setup(interaction: discord.Interaction):
+    class InquirySetupModal(discord.ui.Modal, title="問い合わせボタン設定"):
+        role_input = discord.ui.TextInput(
+            label="対応ロールをメンションまたは名前で入力",
+            style=discord.TextStyle.short,
+            required=True
+        )
+        button_input = discord.ui.TextInput(
+            label="ボタン名（カンマ区切り）",
+            style=discord.TextStyle.short,
+            required=True
+        )
+        message_input = discord.ui.TextInput(
+            label="案内メッセージ内容（改行可：Shift+Enter）",
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
 
-    view = InquiryButtonView(対応ロール, labels, メッセージ内容)
-    await interaction.response.send_message("問い合わせボタンを設置しました。", ephemeral=True)
-    await interaction.channel.send(メッセージ内容, view=view)
+        async def on_submit(self, modal_interaction: discord.Interaction):
+            guild = modal_interaction.guild
+
+            # ロール取得
+            role_name = self.role_input.value.strip()
+            if role_name.startswith("<@&") and role_name.endswith(">"):
+                role = guild.get_role(int(role_name[3:-1]))
+            else:
+                role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                return  # メッセージを出さずに中断
+
+            # ボタン生成
+            labels = [x.strip() for x in re.split("[,、]", self.button_input.value) if x.strip()]
+            if not labels:
+                return
+
+            view = InquiryButtonView(role, labels, self.message_input.value)
+            # 設定完了報告もなく、そのまま送信のみ
+            await modal_interaction.channel.send(self.message_input.value, view=view)
+
+    await interaction.response.send_modal(InquirySetupModal())
+
 
 # ===== 問い合わせボタンビュー =====
 class InquiryButtonView(discord.ui.View):
@@ -338,6 +360,7 @@ class InquiryButtonView(discord.ui.View):
         self.message = message
         for label in labels:
             self.add_item(InquiryButton(label=label, role=role, message=message))
+
 
 # ===== 問い合わせボタン =====
 class InquiryButton(discord.ui.Button):
@@ -358,19 +381,31 @@ class InquiryButton(discord.ui.Button):
             self.role: discord.PermissionOverwrite(view_channel=True, send_messages=True)
         }
 
+        # チャンネル作成のみ（Bot発言なし）
         new_channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
             overwrites=overwrites
         )
 
+        # 削除ボタンのみ表示（Bot発言あり）
         view = DeleteChannelButton()
         await new_channel.send(
             f"{user.mention} さんの『{self.label}』チャンネルが作成されました。\n"
-            "問い合わせをやめる場合は「チャンネルを削除する」を押してください",
+            "問い合わせをやめる場合は「チャンネルを削除する」を押してください。",
             view=view
         )
-        await interaction.response.send_message(f"チャンネルを作成しました → {new_channel.mention}", ephemeral=True)
+
+
+# ===== チャンネル削除ボタン =====
+class DeleteChannelButton(discord.ui.View):
+    @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
+    async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 削除通知も出さず、静かに削除
+        await asyncio.sleep(5)
+        await interaction.channel.delete(reason="問い合わせ完了により削除")
+
+
 
 # ===== チャンネル削除ボタン =====
 class DeleteChannelButton(discord.ui.View):
