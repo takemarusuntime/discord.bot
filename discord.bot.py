@@ -25,6 +25,16 @@ reminders = {}
 voice_sessions = {}
 tracking_feeds = {}
 
+REACTION_FILE = "reaction_roles.json"
+reaction_role_data = {}
+
+def save_reaction_roles():
+    try:
+        with open(REACTION_FILE, "w", encoding="utf-8") as f:
+            json.dump(reaction_role_data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"リアクションロール保存失敗: {e}")
+
 # ===== 絵文字判定関数 =====
 def is_emoji(s: str) -> bool:
     """Unicode絵文字またはDiscordカスタム絵文字かどうかを判定"""
@@ -79,6 +89,7 @@ def save_feeds():
         json.dump(tracking_feeds, f, ensure_ascii=False, indent=4)
 
 
+
 # ------------------------------------------------------------------------------------------------------------
 # ===== Communication Level 機能 =====
 
@@ -102,7 +113,8 @@ async def on_voice_state_update(member, before, after):
         voice_sessions[user_id] = time.time()
 
     # 退出時
-    elif before.channel is not None and after.channel is None:
+    # 退出時（VC移動も含む）
+    elif before.channel is not None and after.channel != before.channel:
         if user_id in voice_sessions:
             duration = int((time.time() - voice_sessions[user_id]) / 60)
             del voice_sessions[user_id]
@@ -170,72 +182,128 @@ async def z2_cl_off(interaction: discord.Interaction):
     save_data()
     await interaction.response.send_message("Communication Level機能をOFFにしました。", ephemeral=True)
 
+
+
 # ------------------------------------------------------------------------------------------------------------
-# ===== ロール付与メッセージ機能 =====
+# ===== ロール付与 =====
 @bot.tree.command(
-    name="x1_ロール付与メッセージ",
-    description="ボタンでロールを付与するメッセージを作成します【管理者のみ】"
+    name="x1_リアクションロール設定",
+    description="リアクションでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
-    メッセージ内容="表示するメッセージ",
-    ボタンとロール="『ボタン名:ロール名』をカンマまたは読点区切りで入力"
+    メッセージ内容="表示するメッセージ（改行可：Shift+Enter）",
+    絵文字とロール="『絵文字:ロール名』をカンマまたは読点区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
+    一人一つのみ="有効にすると他のロールを自動解除します（True/False）"
 )
 @app_commands.default_permissions(manage_roles=True)
-async def role_message(interaction: discord.Interaction, メッセージ内容: str, ボタンとロール: str):
+async def reaction_role_setup(
+    interaction: discord.Interaction,
+    メッセージ内容: str,
+    絵文字とロール: str,
+    一人一つのみ: bool = False
+):
+    # 権限チェック（応答なし）
     if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message("権限がありません。", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        return
+
+    # 入力解析
+    try:
+        pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
+        emoji_role_pairs = []
+        for p in pairs:
+            if ":" not in p:
+                await interaction.response.defer(ephemeral=True)
+                return
+            emoji, role_name = p.split(":", 1)
+            role = discord.utils.get(interaction.guild.roles, name=role_name.strip())
+            if not role:
+                await interaction.response.defer(ephemeral=True)
+                return
+            emoji_role_pairs.append((emoji.strip(), role))
+    except Exception:
+        await interaction.response.defer(ephemeral=True)
+        return
+
+    # メッセージ送信
+    await interaction.response.defer(ephemeral=True)
+    msg = await interaction.channel.send(メッセージ内容)
+
+    # 絵文字を追加
+    for emoji, _ in emoji_role_pairs:
+        try:
+            await msg.add_reaction(emoji)
+        except discord.HTTPException:
+            pass
+
+    # 保存
+    reaction_role_data[str(msg.id)] = {
+        "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
+        "exclusive": 一人一つのみ,
+        "guild_id": interaction.guild.id,
+    }
+    save_reaction_roles()
+
+# ===== リアクション追加 =====
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if str(payload.message_id) not in reaction_role_data:
+        return
+    if payload.user_id == bot.user.id:
+        return
+
+    data = reaction_role_data[str(payload.message_id)]
+    emoji = str(payload.emoji)
+    role_id = data["roles"].get(emoji)
+    if not role_id:
+        return
+
+    guild = bot.get_guild(int(data["guild_id"]))
+    member = guild.get_member(payload.user_id)
+    role = guild.get_role(role_id)
+    if not member or not role:
         return
 
     try:
-        pairs = [x.strip() for x in re.split("[,、]", ボタンとロール) if x.strip()]
-        button_role_pairs = []
-        for p in pairs:
-            if ":" not in p:
-                await interaction.response.send_message("入力形式が正しくありません。『ボタン名:ロール名』の形式で指定してください。", ephemeral=True)
-                return
-            label, role_name = p.split(":", 1)
-            role = discord.utils.get(interaction.guild.roles, name=role_name.strip())
-            if not role:
-                await interaction.response.send_message(f"ロール「{role_name.strip()}」が見つかりません。", ephemeral=True)
-                return
-            button_role_pairs.append((label.strip(), role))
-    except Exception as e:
-        await interaction.response.send_message(f"入力解析に失敗しました: {e}", ephemeral=True)
+        # 一人一つのみ → 他のリアクションロールを削除
+        if data.get("exclusive"):
+            for rid in data["roles"].values():
+                if rid != role.id:
+                    r = guild.get_role(rid)
+                    if r in member.roles:
+                        await member.remove_roles(r)
+
+        await member.add_roles(role)
+    except discord.Forbidden:
+        pass
+    except Exception:
+        pass
+
+# ===== リアクション削除 =====
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    if str(payload.message_id) not in reaction_role_data:
         return
 
-    view = RoleSelectView(button_role_pairs)
-    await interaction.response.defer()
-    await interaction.channel.send(メッセージ内容, view=view)
+    data = reaction_role_data[str(payload.message_id)]
+    emoji = str(payload.emoji)
+    role_id = data["roles"].get(emoji)
+    if not role_id:
+        return
 
-class RoleSelectView(discord.ui.View):
-    def __init__(self, button_role_pairs):
-        super().__init__(timeout=None)
-        for label, role in button_role_pairs:
-            self.add_item(RoleButton(label=label, role=role))
+    guild = bot.get_guild(int(data["guild_id"]))
+    member = guild.get_member(payload.user_id)
+    role = guild.get_role(role_id)
+    if not member or not role:
+        return
 
-class RoleButton(discord.ui.Button):
-    def __init__(self, label, role):
-        super().__init__(label=label, style=discord.ButtonStyle.primary)
-        self.role = role
+    try:
+        await member.remove_roles(role)
+    except discord.Forbidden:
+        pass
+    except Exception:
+        pass
 
-    async def callback(self, interaction: discord.Interaction):
-        member = interaction.user
-        role = self.role
-        if role >= interaction.guild.me.top_role:
-            await interaction.response.send_message(f"{role.name} ロールを操作できません（Botの権限階層が下です）。", ephemeral=True)
-            return
-        try:
-            if role in member.roles:
-                await member.remove_roles(role)
-            else:
-                await member.add_roles(role)
-        except discord.Forbidden:
-            await interaction.response.send_message(f"{role.name} の付与／削除に失敗しました（Botの権限不足）。", ephemeral=True)
-            return
-        except Exception as e:
-            await interaction.response.send_message(f"予期せぬエラー: {e}", ephemeral=True)
-            return
-        await interaction.response.defer()
 
 
 # ------------------------------------------------------------------------------------------------------------
@@ -243,8 +311,8 @@ class RoleButton(discord.ui.Button):
 @bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します【管理者のみ】")
 @app_commands.describe(
     対応ロール="問い合わせに対応するロールを指定",
-    ボタン名="作成するボタン名を指定",
-    メッセージ内容="案内メッセージを入力してください"
+    ボタン名="作成するボタン名を指定（カンマ区切り）",
+    メッセージ内容="案内メッセージを入力してください（改行可：Shift+Enter）"
 )
 @app_commands.default_permissions(administrator=True)
 async def inquiry_setup(
@@ -262,7 +330,6 @@ async def inquiry_setup(
     await interaction.response.send_message("問い合わせボタンを設置しました。", ephemeral=True)
     await interaction.channel.send(メッセージ内容, view=view)
 
-
 # ===== 問い合わせボタンビュー =====
 class InquiryButtonView(discord.ui.View):
     def __init__(self, role, labels, message):
@@ -271,7 +338,6 @@ class InquiryButtonView(discord.ui.View):
         self.message = message
         for label in labels:
             self.add_item(InquiryButton(label=label, role=role, message=message))
-
 
 # ===== 問い合わせボタン =====
 class InquiryButton(discord.ui.Button):
@@ -306,16 +372,7 @@ class InquiryButton(discord.ui.Button):
         )
         await interaction.response.send_message(f"チャンネルを作成しました → {new_channel.mention}", ephemeral=True)
 
-
 # ===== チャンネル削除ボタン =====
-class DeleteChannelButton(discord.ui.View):
-    @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
-    async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("このチャンネルは5秒後に削除されます。", ephemeral=True)
-        await asyncio.sleep(5)
-        await interaction.channel.delete(reason="問い合わせ完了により削除")
-
-
 class DeleteChannelButton(discord.ui.View):
     @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
     async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -391,6 +448,7 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 
+
 # ------------------------------------------------------------------------------------------------------------
 # ===== Xポスト引用（RSS） =====
 @tasks.loop(minutes=5)
@@ -432,6 +490,8 @@ async def x_post_stop(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("このチャンネルでは監視が有効ではありません。", ephemeral=True)
 
+
+
 # ------------------------------------------------------------------------------------------------------------
 # ===== Gold システム（通貨） =====
 
@@ -441,9 +501,14 @@ SHOP_CATEGORIES = ["装飾", "称号", "ロール"]
 # --- Goldデータ読み込み／保存 ---
 def load_gold():
     if os.path.exists(GOLD_FILE):
-        with open(GOLD_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(GOLD_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Goldデータ読み込み失敗 ({e})。新規作成します。")
+            return {}
     return {}
+
 
 def save_gold(data):
     with open(GOLD_FILE, "w", encoding="utf-8") as f:
@@ -514,6 +579,7 @@ async def a1_check_gold(interaction: discord.Interaction):
     )
 
 
+
 # ------------------------------------------------------------------------------------------------------------
 # ===== /a2_送金 =====
 @bot.tree.command(name="a2_送金", description="他のユーザーにGOLDを送金します")
@@ -545,9 +611,10 @@ async def a2_send_gold(interaction: discord.Interaction, 相手: discord.Member,
     )
 
 
+
 # ------------------------------------------------------------------------------------------------------------
 # ===== /a3_ショップ =====
-@bot.tree.command(name="a3_ショップ", description="任意の装飾、称号、ロールをつけられます")
+@bot.tree.command(name="a3_ショップ", description="任意の装飾、称号、ロールをつけられます　※PCのみ")
 @app_commands.describe(カテゴリ="ショップカテゴリを選択")
 @app_commands.choices(カテゴリ=[
     app_commands.Choice(name="装飾", value="装飾"),
@@ -615,6 +682,7 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
         msg = (
             f"**ようこそ！装飾ショップへ！**\n"
             "「🔥名前🔥」名前を絵文字で装飾できます！\n"
+            "※PCのみ\n"
             "\n"
             "**価格：1000 GOLD**\n"
             f"（あなたの所持：{balance} GOLD）\n"
@@ -679,6 +747,7 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
         msg = (
             f"**ようこそ！称号ショップへ！**\n"
             "「[称号] 名前」のように称号を付けられます！\n"
+            "※PCのみ\n"
             "\n"
             "**価格：3000 GOLD**\n"
             f"（あなたの所持：{balance} GOLD）\n"
@@ -817,6 +886,7 @@ async def a4_reset_items(interaction: discord.Interaction, 種類: app_commands.
         return
 
 
+
 # ------------------------------------------------------------------------------------------------------------
 # ===== リマインド =====
 @bot.tree.command(name="c1_リマインド", description="指定した時間または日付＋時間にリマインドを送ります（日本時間）")
@@ -898,13 +968,35 @@ async def c1_remind(interaction: discord.Interaction, 時間または分後: str
 async def on_ready():
     load_data()
     load_feeds()
+
+    # 🔹 リアクションロール永続データの読み込み
+    global reaction_role_data
+    if os.path.exists("reaction_roles.json"):
+        try:
+            with open("reaction_roles.json", "r", encoding="utf-8") as f:
+                reaction_role_data = json.load(f)
+            print(f"リアクションロール設定を {len(reaction_role_data)} 件ロードしました。")
+        except Exception as e:
+            print(f"リアクションロールデータの読み込みに失敗しました: {e}")
+            reaction_role_data = {}
+    else:
+        reaction_role_data = {}
+        print("リアクションロール設定ファイルが見つかりませんでした。新規作成します。")
+
+    # 🔹 コマンド同期
     await bot.tree.sync()
+
+    # 🔹 起動ログ
     print(f"ログイン完了: {bot.user}")
     print(f"Communication Level: {'ON' if cl_data['enabled'] else 'OFF'}")
+
+    # 🔹 定期タスク起動
     if not check_feeds.is_running():
         check_feeds.start()
     if not daily_gold_distribution.is_running():
         daily_gold_distribution.start()
+
+    # 🔹 初回ボーナス処理
     await distribute_initial_gold()
 
 
