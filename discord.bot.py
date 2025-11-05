@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 from datetime import time as dtime
 import feedparser
 from keep_alive import keep_alive
+import random
+
 
 
 # ---------------------------------------------------------
@@ -32,6 +34,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
+intents.reactions = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 JST = timezone(timedelta(hours=9))
 
@@ -272,7 +275,7 @@ async def reaction_role_setup(
     # --- 絵文字とロールの検証 ---
     for p in pairs:
         if ":" not in p:
-            await interaction.response.send_message(f"❌ 形式が不正です: {p}", ephemeral=True)
+            await interaction.response.send_message(f"形式が不正です: {p}", ephemeral=True)
             return
         emoji, role_name = p.split(":", 1)
         role_name = role_name.strip()
@@ -284,7 +287,7 @@ async def reaction_role_setup(
                 role = await interaction.guild.create_role(name=role_name)
                 print(f"ロール自動生成: {role_name}")
             except discord.Forbidden:
-                await interaction.response.send_message(f"⚠️ ロール {role_name} を作成できません（権限不足）", ephemeral=True)
+                await interaction.response.send_message(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
                 return
 
         emoji_role_pairs.append((emoji.strip(), role))
@@ -292,7 +295,7 @@ async def reaction_role_setup(
     # --- モーダルでメッセージ内容を入力 ---
     class ReactionMessageModal(discord.ui.Modal, title="リアクションロールメッセージ入力"):
         message_input = discord.ui.TextInput(
-            label="メッセージ内容（例：好きなロールを選んでください）",
+            label="メッセージ本文",
             style=discord.TextStyle.paragraph,
             required=True
         )
@@ -317,13 +320,12 @@ async def reaction_role_setup(
             save_reaction_roles()
 
             await modal_interaction.response.send_message(
-                f"✅ リアクションロール設定が完了しました！\n"
+                f"リアクションロール設定が完了しました！\n"
                 f"メッセージID: `{msg.id}`\n"
                 f"排他モード: {'ON(一人一つのみ)' if not 複数選択 else 'OFF(複数選択可)'}",
                 ephemeral=True
             )
 
-    # モーダルを送信
     await interaction.response.send_modal(ReactionMessageModal())
 
 
@@ -337,7 +339,7 @@ async def reaction_role_setup(
 )
 @app_commands.default_permissions(administrator=True)
 async def inquiry_setup(interaction: discord.Interaction, 対応ロール: discord.Role, ボタン名: str):
-    # --- ボタン名リスト化 ---
+    # --- ボタン名 ---
     labels = [x.strip() for x in re.split("[,、]", ボタン名) if x.strip()]
     if not labels:
         await interaction.response.send_message("ボタン名が指定されていません。", ephemeral=True)
@@ -346,7 +348,7 @@ async def inquiry_setup(interaction: discord.Interaction, 対応ロール: disco
     # --- メッセージ入力モーダル ---
     class InquiryMessageModal(discord.ui.Modal, title="問い合わせメッセージ入力"):
         message_input = discord.ui.TextInput(
-            label="案内メッセージ内容（改行可）",
+            label="メッセージ本文",
             style=discord.TextStyle.paragraph,
             required=True
         )
