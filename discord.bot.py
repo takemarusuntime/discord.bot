@@ -256,64 +256,75 @@ async def z2_cl_off(interaction: discord.Interaction):
     description="リアクションでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
-    メッセージ="メッセージ内容（例：好きな動物のロールを選んでください）",
     絵文字とロール="『絵文字:ロール名』をカンマ区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
     複数選択="Trueで複数選択を許可、Falseで一人一つのみ"
 )
 @app_commands.default_permissions(manage_roles=True)
 async def reaction_role_setup(
     interaction: discord.Interaction,
-    メッセージ: str,
     絵文字とロール: str,
     複数選択: bool = True
 ):
-    await interaction.response.defer(ephemeral=True)
-
-    # --- 入力処理 ---
+    # ✅ deferしない（モーダル表示をブロックしてしまうため）
     pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
     emoji_role_pairs = []
 
+    # --- 絵文字とロールの検証 ---
     for p in pairs:
         if ":" not in p:
-            await interaction.followup.send(f"形式が不正です: {p}", ephemeral=True)
+            await interaction.response.send_message(f"❌ 形式が不正です: {p}", ephemeral=True)
             return
         emoji, role_name = p.split(":", 1)
         role_name = role_name.strip()
 
-        # ロール存在確認・自動生成
+        # ロール確認・なければ作成
         role = discord.utils.get(interaction.guild.roles, name=role_name)
         if not role:
             try:
                 role = await interaction.guild.create_role(name=role_name)
                 print(f"ロール自動生成: {role_name}")
             except discord.Forbidden:
-                await interaction.followup.send(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
+                await interaction.response.send_message(f"⚠️ ロール {role_name} を作成できません（権限不足）", ephemeral=True)
                 return
 
         emoji_role_pairs.append((emoji.strip(), role))
 
-    # --- メッセージ送信 ---
-    msg = await interaction.channel.send(メッセージ)
-    for emoji, _ in emoji_role_pairs:
-        try:
-            await msg.add_reaction(emoji)
-        except discord.HTTPException:
-            print(f"絵文字追加失敗: {emoji}")
+    # --- モーダルでメッセージ内容を入力 ---
+    class ReactionMessageModal(discord.ui.Modal, title="リアクションロールメッセージ入力"):
+        message_input = discord.ui.TextInput(
+            label="メッセージ内容（例：好きなロールを選んでください）",
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
 
-    # --- 設定保存 ---
-    reaction_role_data[str(msg.id)] = {
-        "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
-        "exclusive": not 複数選択,
-        "guild_id": interaction.guild.id,
-    }
-    save_reaction_roles()
+        async def on_submit(self, modal_interaction: discord.Interaction):
+            content = self.message_input.value.strip()
 
-    await interaction.followup.send(
-        f"リアクションロール設定が完了しました！\n"
-        f"メッセージID: {msg.id}\n"
-        f"排他モード: {'ON(一人一つのみ)' if not 複数選択 else 'OFF(複数選択可)'}",
-        ephemeral=True
-    )
+            # メッセージ送信
+            msg = await modal_interaction.channel.send(content)
+            for emoji, _ in emoji_role_pairs:
+                try:
+                    await msg.add_reaction(emoji)
+                except discord.HTTPException:
+                    print(f"絵文字追加失敗: {emoji}")
+
+            # 設定保存
+            reaction_role_data[str(msg.id)] = {
+                "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
+                "exclusive": not 複数選択,
+                "guild_id": interaction.guild.id,
+            }
+            save_reaction_roles()
+
+            await modal_interaction.response.send_message(
+                f"✅ リアクションロール設定が完了しました！\n"
+                f"メッセージID: `{msg.id}`\n"
+                f"排他モード: {'ON(一人一つのみ)' if not 複数選択 else 'OFF(複数選択可)'}",
+                ephemeral=True
+            )
+
+    # モーダルを送信
+    await interaction.response.send_modal(ReactionMessageModal())
 
 
 # ---------------------------------------------------------
