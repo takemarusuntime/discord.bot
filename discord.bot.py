@@ -256,91 +256,101 @@ async def z2_cl_off(interaction: discord.Interaction):
     description="リアクションでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
+    メッセージ="メッセージ内容（例：好きな動物のロールを選んでください）",
     絵文字とロール="『絵文字:ロール名』をカンマ区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
     複数選択="Trueで複数選択を許可、Falseで一人一つのみ"
 )
 @app_commands.default_permissions(manage_roles=True)
 async def reaction_role_setup(
     interaction: discord.Interaction,
+    メッセージ: str,
     絵文字とロール: str,
     複数選択: bool = True
 ):
-    # deferを使うとモーダルが出せなくなるため削除！
-    # await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
+    # --- 入力処理 ---
     pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
     emoji_role_pairs = []
 
     for p in pairs:
         if ":" not in p:
-            await interaction.response.send_message(f"形式が不正です: {p}", ephemeral=True)
+            await interaction.followup.send(f"形式が不正です: {p}", ephemeral=True)
             return
         emoji, role_name = p.split(":", 1)
         role_name = role_name.strip()
 
+        # ロール存在確認・自動生成
         role = discord.utils.get(interaction.guild.roles, name=role_name)
         if not role:
             try:
                 role = await interaction.guild.create_role(name=role_name)
                 print(f"ロール自動生成: {role_name}")
             except discord.Forbidden:
-                await interaction.response.send_message(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
+                await interaction.followup.send(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
                 return
+
         emoji_role_pairs.append((emoji.strip(), role))
 
-    # --- モーダル定義 ---
-    class ReactionRoleMessageModal(discord.ui.Modal, title="リアクションロール：メッセージ入力"):
-        message_input = discord.ui.TextInput(
-            label="表示するメッセージ内容",
-            style=discord.TextStyle.paragraph,
-            required=True
-        )
+    # --- メッセージ送信 ---
+    msg = await interaction.channel.send(メッセージ)
+    for emoji, _ in emoji_role_pairs:
+        try:
+            await msg.add_reaction(emoji)
+        except discord.HTTPException:
+            print(f"絵文字追加失敗: {emoji}")
 
-        async def on_submit(self, modal_interaction: discord.Interaction):
-            content = self.message_input.value.strip()
-            msg = await modal_interaction.channel.send(content)
-            for emoji, _ in emoji_role_pairs:
-                try:
-                    await msg.add_reaction(emoji)
-                except discord.HTTPException:
-                    print(f"絵文字追加失敗: {emoji}")
+    # --- 設定保存 ---
+    reaction_role_data[str(msg.id)] = {
+        "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
+        "exclusive": not 複数選択,
+        "guild_id": interaction.guild.id,
+    }
+    save_reaction_roles()
 
-            reaction_role_data[str(msg.id)] = {
-                "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
-                "exclusive": not 複数選択,
-                "guild_id": interaction.guild.id,
-            }
-            save_reaction_roles()
-            await modal_interaction.response.send_message("リアクションロール設定が完了しました！", ephemeral=True)
-
-    # --- モーダルを直接送信 ---
-    await interaction.response.send_modal(ReactionRoleMessageModal())
+    await interaction.followup.send(
+        f"リアクションロール設定が完了しました！\n"
+        f"メッセージID: {msg.id}\n"
+        f"排他モード: {'ON(一人一つのみ)' if not 複数選択 else 'OFF(複数選択可)'}",
+        ephemeral=True
+    )
 
 
 # ---------------------------------------------------------
 # 問い合わせチャンネル作成コマンド
 # ---------------------------------------------------------
 @bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します【管理者のみ】")
-@app_commands.describe(対応ロール="問い合わせ対応ロールを選択してください")
+@app_commands.describe(
+    対応ロール="問い合わせ対応ロールを選択してください",
+    ボタン名="ボタン名をカンマ区切りで指定（例：質問,要望,申請など）"
+)
 @app_commands.default_permissions(administrator=True)
-async def inquiry_setup(interaction: discord.Interaction, 対応ロール: discord.Role):
+async def inquiry_setup(interaction: discord.Interaction, 対応ロール: discord.Role, ボタン名: str):
+    # --- ボタン名リスト化 ---
+    labels = [x.strip() for x in re.split("[,、]", ボタン名) if x.strip()]
+    if not labels:
+        await interaction.response.send_message("ボタン名が指定されていません。", ephemeral=True)
+        return
 
-    class InquirySetupModal(discord.ui.Modal, title="問い合わせボタン設定"):
-        button_input = discord.ui.TextInput(label="ボタン名（カンマ区切り）", style=discord.TextStyle.short)
-        message_input = discord.ui.TextInput(label="案内メッセージ内容（改行可）", style=discord.TextStyle.paragraph)
+    # --- メッセージ入力モーダル ---
+    class InquiryMessageModal(discord.ui.Modal, title="問い合わせメッセージ入力"):
+        message_input = discord.ui.TextInput(
+            label="案内メッセージ内容（改行可）",
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
 
         async def on_submit(self, modal_interaction: discord.Interaction):
-            guild = modal_interaction.guild
-            role = 対応ロール
-            labels = [x.strip() for x in re.split("[,、]", self.button_input.value) if x.strip()]
-            if not labels:
-                return
-            view = InquiryButtonView(role, labels, self.message_input.value)
+            view = InquiryButtonView(対応ロール, labels, self.message_input.value)
             await modal_interaction.channel.send(self.message_input.value, view=view)
+            await modal_interaction.response.send_message("問い合わせボタンを設置しました。", ephemeral=True)
 
-    await interaction.response.send_modal(InquirySetupModal())
+    await interaction.response.send_modal(InquiryMessageModal())
 
 
+# ---------------------------------------------------------
+# 問い合わせボタンビュー
+# ---------------------------------------------------------
 class InquiryButtonView(discord.ui.View):
     def __init__(self, role, labels, message):
         super().__init__(timeout=None)
