@@ -265,15 +265,15 @@ async def reaction_role_setup(
     絵文字とロール: str,
     複数選択: bool = True
 ):
-    await interaction.response.defer(ephemeral=True)
+    # deferを使うとモーダルが出せなくなるため削除！
+    # await interaction.response.defer(ephemeral=True)
 
     pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
     emoji_role_pairs = []
 
-    # --- 入力検証とロール自動生成 ---
     for p in pairs:
         if ":" not in p:
-            await interaction.followup.send(f"形式が不正です: {p}", ephemeral=True)
+            await interaction.response.send_message(f"形式が不正です: {p}", ephemeral=True)
             return
         emoji, role_name = p.split(":", 1)
         role_name = role_name.strip()
@@ -284,11 +284,11 @@ async def reaction_role_setup(
                 role = await interaction.guild.create_role(name=role_name)
                 print(f"ロール自動生成: {role_name}")
             except discord.Forbidden:
-                await interaction.followup.send(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
+                await interaction.response.send_message(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
                 return
         emoji_role_pairs.append((emoji.strip(), role))
 
-    # --- メッセージ内容入力モーダル ---
+    # --- モーダル定義 ---
     class ReactionRoleMessageModal(discord.ui.Modal, title="リアクションロール：メッセージ入力"):
         message_input = discord.ui.TextInput(
             label="表示するメッセージ内容",
@@ -305,82 +305,16 @@ async def reaction_role_setup(
                 except discord.HTTPException:
                     print(f"絵文字追加失敗: {emoji}")
 
-            # --- 設定データ保存 ---
             reaction_role_data[str(msg.id)] = {
                 "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
-                "exclusive": not 複数選択,  # ← Trueなら排他モードOFF
+                "exclusive": not 複数選択,
                 "guild_id": interaction.guild.id,
             }
             save_reaction_roles()
+            await modal_interaction.response.send_message("リアクションロール設定が完了しました！", ephemeral=True)
 
-    await interaction.followup.send("メッセージ内容を入力してください。", ephemeral=True)
-    await interaction.followup.send_modal(ReactionRoleMessageModal())
-
-
-# --- リアクション追加 ---
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if str(payload.message_id) not in reaction_role_data:
-        return
-    if payload.user_id == bot.user.id:
-        return
-
-    try:
-        data = reaction_role_data[str(payload.message_id)]
-        emoji = str(payload.emoji)
-        role_id = data["roles"].get(emoji)
-        if not role_id:
-            return
-
-        guild = bot.get_guild(int(data["guild_id"]))
-        member = guild.get_member(payload.user_id)
-        role = guild.get_role(role_id)
-
-        if not role:
-            role = await guild.create_role(name=f"Role_{emoji}")
-            data["roles"][emoji] = role.id
-            save_reaction_roles()
-            print(f"ロール再生成: Role_{emoji}")
-
-        if not (member and role):
-            return
-
-        # --- 一人一つのみモード時の削除処理 ---
-        if data.get("exclusive"):
-            for rid in data["roles"].values():
-                if rid != role.id:
-                    r = guild.get_role(rid)
-                    if r and r in member.roles:
-                        await member.remove_roles(r)
-
-        await member.add_roles(role)
-    except Exception as e:
-        print(f"リアクション追加エラー: {e}")
-
-
-# --- リアクション削除 ---
-@bot.event
-async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    if str(payload.message_id) not in reaction_role_data:
-        return
-
-    try:
-        data = reaction_role_data[str(payload.message_id)]
-        emoji = str(payload.emoji)
-        role_id = data["roles"].get(emoji)
-        if not role_id:
-            return
-
-        guild = bot.get_guild(int(data["guild_id"]))
-        member = guild.get_member(payload.user_id)
-        role = guild.get_role(role_id)
-
-        if not (member and role):
-            return
-
-        await member.remove_roles(role)
-    except Exception as e:
-        print(f"リアクション削除エラー: {e}")
+    # --- モーダルを直接送信 ---
+    await interaction.response.send_modal(ReactionRoleMessageModal())
 
 
 # ---------------------------------------------------------
@@ -908,7 +842,7 @@ async def restore_reminders():
 # ---------------------------------------------------------
 # おみくじ機能
 # ---------------------------------------------------------
-@bot.tree.command(name="おみくじ", description="おみくじを引きます")
+@bot.tree.command(name="b1_おみくじ", description="おみくじを引きます")
 async def omikuji(interaction: discord.Interaction):
     # 確率設定
     fixed = {
