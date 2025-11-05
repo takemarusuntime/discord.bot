@@ -665,7 +665,7 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
                 await modal_interaction.response.send_message(f"称号を変更しました！ → {new_name}", ephemeral=True)
 
         view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="称号入力", style=discord.ButtonStyle.success, custom_id="title_button"))
+        view.add_item(discord.ui.Button(label="称号入力", style=discord.ButtonStyle.primary, custom_id="title_button"))
 
         async def button_callback(interaction_button: discord.Interaction):
             modal = TitleModal()
@@ -880,23 +880,25 @@ async def omikuji(interaction: discord.Interaction):
 
     result = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
 
-    # Embed作成（どの端末でも安定表示）
+    # Embed作成（安定表示）
     embed = discord.Embed(
         title="🎴 おみくじの結果 🎴",
         color=discord.Color.gold()
     )
 
-    embed.description = f"# ﾎﾟｷｭｰｰﾝ!!\n# {result}"
-
-    # 特別結果：鬼がかり
+    # --- 特別結果：鬼がかり ---
     if result == "鬼がかり 3000 BONUS":
         add_gold(interaction.user.id, 3000)
         embed.description = (
-            "# ﾎﾟｷｭｰｰﾝ!!\n"
+            "# 💥 ﾎﾟｷｭｰｰﾝ!!\n"
             "## ✨ **鬼がかり 3000 BONUS** ✨\n"
-            "### 💰 **3000GOLD GET!!!!!**"
+            "### **3000GOLD GET!!!!!**"
         )
-        embed.color = discord.Color.from_str("#FFD700")  # 明るい金色
+        embed.color = discord.Color.from_str("#FFD700")  # 金色
+
+    # --- 通常結果 ---
+    else:
+        embed.description = f"# {result}"
 
     embed.set_footer(text=f"{interaction.user.display_name} さんの運勢", icon_url=interaction.user.display_avatar.url)
 
