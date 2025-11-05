@@ -1,13 +1,33 @@
+# =========================================================
+# Discord Bot 総合システム
+# =========================================================
+# 対応機能：
+# 1. Communication Level（VC＋チャット）ロール付与
+# 2. 既存ユーザーへ初回10000GOLD
+# 3. 新規加入ユーザーへ10000GOLD
+# 4. 毎日全ユーザーへ100GOLD
+# 5. チャット・VC滞在でGOLD付与
+# 6. リアクションロール
+# 7. 問い合わせチャンネル自動生成
+# 8. ピン留め・削除
+# 9. X投稿自動引用・停止
+# 10. 残高確認・送金・ショップ
+# 11. リマインド
+# =========================================================
+
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 import asyncio, json, os, re, time
 from datetime import datetime, timedelta, timezone
 from datetime import time as dtime
-from keep_alive import keep_alive
 import feedparser
+from keep_alive import keep_alive
 
-# ===== 基本設定 =====
+
+# ---------------------------------------------------------
+# 基本設定
+# ---------------------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -15,84 +35,121 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 JST = timezone(timedelta(hours=9))
 
-# ===== データファイル =====
+# ---------------------------------------------------------
+# データファイル定義
+# ---------------------------------------------------------
 DATA_FILE = "cl_data.json"
 FEEDS_FILE = "feeds.json"
 TEMPLATE_FILE = "auto_templates.json"
+REACTION_FILE = "reaction_roles.json"
+GOLD_FILE = "gold_data.json"
 
+# ---------------------------------------------------------
+# グローバル変数
+# ---------------------------------------------------------
 cl_data = {"users": {}, "enabled": False}
-reminders = {}
 voice_sessions = {}
 tracking_feeds = {}
-
-REACTION_FILE = "reaction_roles.json"
+auto_templates = {}
+last_template_messages = {}
 reaction_role_data = {}
+gold_data = {}
+reminders = {}
 
-def save_reaction_roles():
+# ---------------------------------------------------------
+# ファイル読み書き関数
+# ---------------------------------------------------------
+def load_json(path, default):
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ {path} 読み込み失敗: {e}")
+    return default
+
+def save_json(path, data):
     try:
-        with open(REACTION_FILE, "w", encoding="utf-8") as f:
-            json.dump(reaction_role_data, f, ensure_ascii=False, indent=4)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"リアクションロール保存失敗: {e}")
+        print(f"⚠️ {path} 保存失敗: {e}")
 
-# ===== 絵文字判定関数 =====
+# ---------------------------------------------------------
+# データロード関数
+# ---------------------------------------------------------
+def load_all_data():
+    global cl_data, tracking_feeds, auto_templates, reaction_role_data, gold_data
+    cl_data = load_json(DATA_FILE, {"users": {}, "enabled": False})
+    tracking_feeds = load_json(FEEDS_FILE, {})
+    auto_templates = load_json(TEMPLATE_FILE, {})
+    reaction_role_data = load_json(REACTION_FILE, {})
+    gold_data = load_json(GOLD_FILE, {})
+
+def save_cl_data(): save_json(DATA_FILE, cl_data)
+def save_feeds(): save_json(FEEDS_FILE, tracking_feeds)
+def save_templates(): save_json(TEMPLATE_FILE, auto_templates)
+def save_reaction_roles(): save_json(REACTION_FILE, reaction_role_data)
+def save_gold(): save_json(GOLD_FILE, gold_data)
+
+# ---------------------------------------------------------
+# 絵文字判定関数
+# ---------------------------------------------------------
 def is_emoji(s: str) -> bool:
-    """Unicode絵文字またはDiscordカスタム絵文字かどうかを判定"""
-    # カスタム絵文字 (<:name:id> or <a:name:id>)
+    """UnicodeまたはDiscordカスタム絵文字か判定"""
     if re.fullmatch(r"<a?:\w+:\d+>", s):
         return True
-    # 標準絵文字（広範囲対応）
     emoji_pattern = re.compile(r"(<a?:\w+:\d+>|[\U00010000-\U0010FFFF])", flags=re.UNICODE)
     return bool(emoji_pattern.fullmatch(s))
 
-# ===== ピン留めテンプレート管理 =====
-def load_templates():
-    if os.path.exists(TEMPLATE_FILE):
-        with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# ---------------------------------------------------------
+# GOLDシステム
+# ---------------------------------------------------------
+def get_balance(user_id: int) -> int:
+    return gold_data.get(str(user_id), 0)
 
-def save_templates(data):
-    with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def add_gold(user_id: int, amount: int):
+    uid = str(user_id)
+    gold_data[uid] = gold_data.get(uid, 0) + amount
+    save_gold()
 
-auto_templates = load_templates()
-last_template_messages = {}
+#毎日00:00に全ユーザーへ100G配布
+@tasks.loop(time=dtime(hour=0, minute=0, tzinfo=JST))
+async def daily_gold_distribution():
+    count = 0
+    for guild in bot.guilds:
+        for member in guild.members:
+            if not member.bot:
+                add_gold(member.id, 100)
+                count += 1
+    print(f"[{datetime.now(JST).strftime('%m/%d %H:%M')}] 毎日配布完了: {count}ユーザーに100G付与")
 
-# ===== データ管理 =====
-def load_data():
-    global cl_data
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                cl_data = json.load(f)
-        except:
-            print("Communication Level データ読み込み失敗。新規作成します。")
-            cl_data = {"users": {}, "enabled": False}
+#新規メンバーに10000G付与
+@bot.event
+async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+    add_gold(member.id, 10000)
+    print(f"[JOIN] {member.display_name} に10000Gを付与しました。")
 
-def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(cl_data, f, ensure_ascii=False, indent=4)
-
-def load_feeds():
-    global tracking_feeds
-    if os.path.exists(FEEDS_FILE):
-        try:
-            with open(FEEDS_FILE, "r", encoding="utf-8") as f:
-                tracking_feeds = json.load(f)
-        except:
-            print("RSSデータ読み込み失敗。新規作成します。")
-            tracking_feeds = {}
-
-def save_feeds():
-    with open(FEEDS_FILE, "w", encoding="utf-8") as f:
-        json.dump(tracking_feeds, f, ensure_ascii=False, indent=4)
+#初回起動時のみ既存全メンバーへ10000G付与
+async def distribute_initial_gold():
+    FLAG_FILE = "initial_gold_flag.json"
+    if os.path.exists(FLAG_FILE):
+        return
+    count = 0
+    for guild in bot.guilds:
+        for member in guild.members:
+            if not member.bot:
+                add_gold(member.id, 10000)
+                count += 1
+    save_json(FLAG_FILE, {"distributed": True, "count": count})
+    print(f"初回ボーナス: 既存メンバー {count} 名に10000Gを配布しました。")
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== Communication Level 機能 =====
-
+# ---------------------------------------------------------
+# Communication Level 機能
+# ---------------------------------------------------------
 CL_LEVELS = [
     {"name": "Communication Level 1", "text": 10, "vc": 30, "color": 0x999999},
     {"name": "Communication Level 2", "text": 50, "vc": 180, "color": 0x55ff55},
@@ -102,48 +159,58 @@ CL_LEVELS = [
     {"name": "Communication Level 6", "text": 1000, "vc": 14400, "color": 0xff5555},
 ]
 
+# --- チャット記録 ---
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    #Communication Level 記録
+    if cl_data.get("enabled"):
+        uid = str(message.author.id)
+        if uid not in cl_data["users"]:
+            cl_data["users"][uid] = {"text": 0, "vc": 0}
+        cl_data["users"][uid]["text"] += len(message.content)
+        save_cl_data()
+        await check_and_assign_roles(message.author)
+
+    await bot.process_commands(message)
+
+# --- VC滞在時間 ---
 @bot.event
 async def on_voice_state_update(member, before, after):
     if not cl_data.get("enabled"):
         return
-    user_id = str(member.id)
+    uid = str(member.id)
 
-    # 入室
+    # 入室時
     if before.channel is None and after.channel is not None:
-        voice_sessions[user_id] = time.time()
+        voice_sessions[uid] = time.time()
 
-    # 退出時
-    # 退出時（VC移動も含む）
+    # 退出／移動時
     elif before.channel is not None and after.channel != before.channel:
-        if user_id in voice_sessions:
-            duration = int((time.time() - voice_sessions[user_id]) / 60)
-            del voice_sessions[user_id]
+        if uid in voice_sessions:
+            duration = int((time.time() - voice_sessions[uid]) / 60)
+            del voice_sessions[uid]
+            cl_data["users"].setdefault(uid, {"text": 0, "vc": 0})
+            cl_data["users"][uid]["vc"] += duration
+            save_cl_data()
 
-            if user_id not in cl_data["users"]:
-                cl_data["users"][user_id] = {"text": 0, "vc": 0}
-            cl_data["users"][user_id]["vc"] += duration
-            save_data()
-
-            # VC滞在報酬
+            # GOLD報酬
             if duration > 0:
-                try:
-                    add_gold(member.id, duration * 5)
-                except Exception as e:
-                    print(f"VC報酬付与エラー: {e}")
+                add_gold(member.id, duration * 5)
 
             await check_and_assign_roles(member)
 
+# --- ロール判定 ---
 async def check_and_assign_roles(member: discord.Member):
     guild = member.guild
-    user_id = str(member.id)
-    data = cl_data["users"].get(user_id, {"text": 0, "vc": 0})
-    text = data["text"]
-    vc = data["vc"]
+    uid = str(member.id)
+    data = cl_data["users"].get(uid, {"text": 0, "vc": 0})
 
-    achieved = None
-    color = None
+    achieved, color = None, None
     for level in CL_LEVELS:
-        if text >= level["text"] and vc >= level["vc"]:
+        if data["text"] >= level["text"] and data["vc"] >= level["vc"]:
             achieved = level["name"]
             color = level["color"]
         else:
@@ -158,42 +225,40 @@ async def check_and_assign_roles(member: discord.Member):
 
     if role not in member.roles:
         await member.add_roles(role)
-        print(f"{member.display_name} に {achieved} を付与しました")
 
-    for level in CL_LEVELS:
-        if level["name"] != achieved:
-            r = discord.utils.get(guild.roles, name=level["name"])
+    for lvl in CL_LEVELS:
+        if lvl["name"] != achieved:
+            r = discord.utils.get(guild.roles, name=lvl["name"])
             if r in member.roles:
                 await member.remove_roles(r)
-                print(f"{member.display_name} から {level['name']} を削除しました")
 
-# ===== ON/OFF =====
-@bot.tree.command(name="z1_cl_on", description="Communication Level機能をONにします（管理者のみ）")
+# --- ON/OFF切替 ---
+@bot.tree.command(name="z1_cl_on", description="Communication Level機能をONにします【管理者のみ】")
 @app_commands.default_permissions(administrator=True)
 async def z1_cl_on(interaction: discord.Interaction):
     cl_data["enabled"] = True
-    save_data()
+    save_cl_data()
     await interaction.response.send_message("Communication Level機能をONにしました。", ephemeral=True)
 
-@bot.tree.command(name="z2_cl_off", description="Communication Level機能をOFFにします（管理者のみ）")
+@bot.tree.command(name="z2_cl_off", description="Communication Level機能をOFFにします【管理者のみ】")
 @app_commands.default_permissions(administrator=True)
 async def z2_cl_off(interaction: discord.Interaction):
     cl_data["enabled"] = False
-    save_data()
+    save_cl_data()
     await interaction.response.send_message("Communication Level機能をOFFにしました。", ephemeral=True)
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== ロール付与 =====
+# ---------------------------------------------------------
+# リアクションロール機能
+# ---------------------------------------------------------
 @bot.tree.command(
     name="x1_リアクションロール設定",
     description="リアクションでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
     メッセージ内容="表示するメッセージ（改行可：Shift+Enter）",
-    絵文字とロール="『絵文字:ロール名』をカンマまたは読点区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
-    一人一つのみ="有効にすると他のロールを自動解除します（True/False）"
+    絵文字とロール="『絵文字:ロール名』をカンマ区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
+    一人一つのみ="Trueで他のロールを自動解除"
 )
 @app_commands.default_permissions(manage_roles=True)
 async def reaction_role_setup(
@@ -202,41 +267,25 @@ async def reaction_role_setup(
     絵文字とロール: str,
     一人一つのみ: bool = False
 ):
-    # 権限チェック（応答なし）
-    if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.defer(ephemeral=True)
-        return
-
-    # 入力解析
-    try:
-        pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
-        emoji_role_pairs = []
-        for p in pairs:
-            if ":" not in p:
-                await interaction.response.defer(ephemeral=True)
-                return
-            emoji, role_name = p.split(":", 1)
-            role = discord.utils.get(interaction.guild.roles, name=role_name.strip())
-            if not role:
-                await interaction.response.defer(ephemeral=True)
-                return
-            emoji_role_pairs.append((emoji.strip(), role))
-    except Exception:
-        await interaction.response.defer(ephemeral=True)
-        return
-
-    # メッセージ送信
     await interaction.response.defer(ephemeral=True)
-    msg = await interaction.channel.send(メッセージ内容)
+    pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
+    emoji_role_pairs = []
 
-    # 絵文字を追加
+    for p in pairs:
+        if ":" not in p:
+            return
+        emoji, role_name = p.split(":", 1)
+        role = discord.utils.get(interaction.guild.roles, name=role_name.strip())
+        if role:
+            emoji_role_pairs.append((emoji.strip(), role))
+
+    msg = await interaction.channel.send(メッセージ内容)
     for emoji, _ in emoji_role_pairs:
         try:
             await msg.add_reaction(emoji)
         except discord.HTTPException:
             pass
 
-    # 保存
     reaction_role_data[str(msg.id)] = {
         "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
         "exclusive": 一人一つのみ,
@@ -244,7 +293,7 @@ async def reaction_role_setup(
     }
     save_reaction_roles()
 
-# ===== リアクション追加 =====
+# --- 追加リアクション ---
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if str(payload.message_id) not in reaction_role_data:
@@ -261,25 +310,21 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     guild = bot.get_guild(int(data["guild_id"]))
     member = guild.get_member(payload.user_id)
     role = guild.get_role(role_id)
-    if not member or not role:
+    if not (member and role):
         return
 
     try:
-        # 一人一つのみ → 他のリアクションロールを削除
         if data.get("exclusive"):
             for rid in data["roles"].values():
                 if rid != role.id:
                     r = guild.get_role(rid)
                     if r in member.roles:
                         await member.remove_roles(r)
-
         await member.add_roles(role)
-    except discord.Forbidden:
-        pass
     except Exception:
         pass
 
-# ===== リアクション削除 =====
+# --- リアクション削除 ---
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if str(payload.message_id) not in reaction_role_data:
@@ -294,65 +339,39 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     guild = bot.get_guild(int(data["guild_id"]))
     member = guild.get_member(payload.user_id)
     role = guild.get_role(role_id)
-    if not member or not role:
+    if not (member and role):
         return
 
     try:
         await member.remove_roles(role)
-    except discord.Forbidden:
-        pass
     except Exception:
         pass
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== 問い合わせボタン設置コマンド（完全サイレント版） =====
+# ---------------------------------------------------------
+# 問い合わせチャンネル作成コマンド
+# ---------------------------------------------------------
 @bot.tree.command(name="x2_問い合わせ設定", description="問い合わせボタンを設置します【管理者のみ】")
+@app_commands.describe(対応ロール="問い合わせ対応ロールを選択してください")
 @app_commands.default_permissions(administrator=True)
-async def inquiry_setup(interaction: discord.Interaction):
+async def inquiry_setup(interaction: discord.Interaction, 対応ロール: discord.Role):
+
     class InquirySetupModal(discord.ui.Modal, title="問い合わせボタン設定"):
-        role_input = discord.ui.TextInput(
-            label="対応ロールをメンションまたは名前で入力",
-            style=discord.TextStyle.short,
-            required=True
-        )
-        button_input = discord.ui.TextInput(
-            label="ボタン名（カンマ区切り）",
-            style=discord.TextStyle.short,
-            required=True
-        )
-        message_input = discord.ui.TextInput(
-            label="案内メッセージ内容（改行可：Shift+Enter）",
-            style=discord.TextStyle.paragraph,
-            required=True
-        )
+        button_input = discord.ui.TextInput(label="ボタン名（カンマ区切り）", style=discord.TextStyle.short)
+        message_input = discord.ui.TextInput(label="案内メッセージ内容（改行可）", style=discord.TextStyle.paragraph)
 
         async def on_submit(self, modal_interaction: discord.Interaction):
             guild = modal_interaction.guild
-
-            # ロール取得
-            role_name = self.role_input.value.strip()
-            if role_name.startswith("<@&") and role_name.endswith(">"):
-                role = guild.get_role(int(role_name[3:-1]))
-            else:
-                role = discord.utils.get(guild.roles, name=role_name)
-            if not role:
-                return  # メッセージを出さずに中断
-
-            # ボタン生成
+            role = 対応ロール
             labels = [x.strip() for x in re.split("[,、]", self.button_input.value) if x.strip()]
             if not labels:
                 return
-
             view = InquiryButtonView(role, labels, self.message_input.value)
-            # 設定完了報告もなく、そのまま送信のみ
             await modal_interaction.channel.send(self.message_input.value, view=view)
 
     await interaction.response.send_modal(InquirySetupModal())
 
 
-# ===== 問い合わせボタンビュー =====
 class InquiryButtonView(discord.ui.View):
     def __init__(self, role, labels, message):
         super().__init__(timeout=None)
@@ -362,7 +381,6 @@ class InquiryButtonView(discord.ui.View):
             self.add_item(InquiryButton(label=label, role=role, message=message))
 
 
-# ===== 問い合わせボタン =====
 class InquiryButton(discord.ui.Button):
     def __init__(self, label, role, message):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
@@ -373,22 +391,15 @@ class InquiryButton(discord.ui.Button):
         guild = interaction.guild
         user = interaction.user
         category = interaction.channel.category
-
         channel_name = f"{user.display_name}-{self.label}"
+
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
             self.role: discord.PermissionOverwrite(view_channel=True, send_messages=True)
         }
 
-        # チャンネル作成のみ（Bot発言なし）
-        new_channel = await guild.create_text_channel(
-            name=channel_name,
-            category=category,
-            overwrites=overwrites
-        )
-
-        # 削除ボタンのみ表示（Bot発言あり）
+        new_channel = await guild.create_text_channel(name=channel_name, category=category, overwrites=overwrites)
         view = DeleteChannelButton()
         await new_channel.send(
             f"{user.mention} さんの『{self.label}』チャンネルが作成されました。\n"
@@ -397,36 +408,26 @@ class InquiryButton(discord.ui.Button):
         )
 
 
-# ===== チャンネル削除ボタン =====
 class DeleteChannelButton(discord.ui.View):
     @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
     async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 削除通知も出さず、静かに削除
+        await interaction.response.send_message("数秒後にチャンネルを自動削除します", ephemeral=True)
         await asyncio.sleep(5)
         await interaction.channel.delete(reason="問い合わせ完了により削除")
 
 
-
-# ===== チャンネル削除ボタン =====
-class DeleteChannelButton(discord.ui.View):
-    @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
-    async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("このチャンネルは5秒後に削除されます。", ephemeral=True)
-        await asyncio.sleep(5)
-        await interaction.channel.delete(reason="問い合わせ完了により削除")
-
-
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== ピン留め機能 =====
+# ---------------------------------------------------------
+# ピン留め機能
+# ---------------------------------------------------------
 @bot.tree.command(name="x3_ピン留め設定", description="このチャンネルにピン留めを設定します【管理者のみ】")
 @app_commands.describe(メッセージ="ピン留め内容")
 @app_commands.default_permissions(administrator=True)
 async def pin_set(interaction: discord.Interaction, メッセージ: str):
     channel_id = str(interaction.channel.id)
     auto_templates[channel_id] = メッセージ
-    save_templates(auto_templates)
+    save_templates()
     await interaction.response.send_message("このチャンネルにピン留めを設定しました。", ephemeral=True)
+
 
 @bot.tree.command(name="x4_ピン留め停止", description="このチャンネルのピン留めを停止します【管理者のみ】")
 @app_commands.default_permissions(administrator=True)
@@ -434,11 +435,13 @@ async def pin_stop(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
     if channel_id in auto_templates:
         del auto_templates[channel_id]
-        save_templates(auto_templates)
+        save_templates()
         await interaction.response.send_message("このチャンネルのピン留めを停止しました。", ephemeral=True)
     else:
         await interaction.response.send_message("このチャンネルにはピン留めが設定されていません。", ephemeral=True)
 
+
+# on_message のピン留め処理
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -446,7 +449,7 @@ async def on_message(message: discord.Message):
 
     channel_id = str(message.channel.id)
 
-    # チャット報酬（2文字で1G）
+    # チャット報酬
     try:
         gain = len(message.content) // 2
         if gain > 0:
@@ -465,6 +468,7 @@ async def on_message(message: discord.Message):
                 pass
             except discord.Forbidden:
                 print(f"Botに削除権限がありません（チャンネルID: {channel_id}）")
+
         try:
             new_msg = await message.channel.send(template_text)
             last_template_messages[channel_id] = new_msg.id
@@ -473,19 +477,19 @@ async def on_message(message: discord.Message):
 
     # Communication Level 記録
     if cl_data.get("enabled"):
-        user_id = str(message.author.id)
-        if user_id not in cl_data["users"]:
-            cl_data["users"][user_id] = {"text": 0, "vc": 0}
-        cl_data["users"][user_id]["text"] += len(message.content)
-        save_data()
+        uid = str(message.author.id)
+        if uid not in cl_data["users"]:
+            cl_data["users"][uid] = {"text": 0, "vc": 0}
+        cl_data["users"][uid]["text"] += len(message.content)
+        save_cl_data()
         await check_and_assign_roles(message.author)
 
     await bot.process_commands(message)
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== Xポスト引用（RSS） =====
+# ---------------------------------------------------------
+# Xポスト引用機能
+# ---------------------------------------------------------
 @tasks.loop(minutes=5)
 async def check_feeds():
     for channel_id, info in tracking_feeds.items():
@@ -503,6 +507,7 @@ async def check_feeds():
             save_feeds()
             await channel.send(link)
 
+
 @bot.tree.command(name="x5_xポスト引用", description="指定アカウントの新規ポスト・引用を自動で貼ります【管理者のみ】")
 @app_commands.describe(アカウント名="例：elonmusk")
 @app_commands.default_permissions(administrator=True)
@@ -513,6 +518,7 @@ async def x_post(interaction: discord.Interaction, アカウント名: str):
     if not check_feeds.is_running():
         check_feeds.start()
     await interaction.response.send_message(f"@{アカウント名} の投稿監視を開始しました。", ephemeral=True)
+
 
 @bot.tree.command(name="x6_xポスト停止", description="このチャンネルでのXポスト監視を停止します【管理者のみ】")
 @app_commands.default_permissions(administrator=True)
@@ -526,129 +532,37 @@ async def x_post_stop(interaction: discord.Interaction):
         await interaction.response.send_message("このチャンネルでは監視が有効ではありません。", ephemeral=True)
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== Gold システム（通貨） =====
-
-GOLD_FILE = "gold_data.json"
-SHOP_CATEGORIES = ["装飾", "称号", "ロール"]
-
-# --- Goldデータ読み込み／保存 ---
-def load_gold():
-    if os.path.exists(GOLD_FILE):
-        try:
-            with open(GOLD_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Goldデータ読み込み失敗 ({e})。新規作成します。")
-            return {}
-    return {}
-
-
-def save_gold(data):
-    with open(GOLD_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-gold_data = load_gold()
-
-# --- 残高操作 ---
-def get_balance(user_id: int) -> int:
-    return gold_data.get(str(user_id), 0)
-
-def add_gold(user_id: int, amount: int):
-    uid = str(user_id)
-    gold_data[uid] = gold_data.get(uid, 0) + amount
-    save_gold(gold_data)
-
-# ===== 毎日配布（JST 00:00 に全ユーザーへ 100 GOLD）=====
-@tasks.loop(time=dtime(hour=0, minute=0, tzinfo=JST))
-async def daily_gold_distribution():
-    count = 0
-    for guild in bot.guilds:
-        for member in guild.members:
-            if member.bot:
-                continue
-            add_gold(member.id, 100)
-            count += 1
-    print(f"[{datetime.now(JST).strftime('%m/%d %H:%M')}] 毎日配布完了: {count}ユーザーに100 GOLD付与")
-
-# ===== 新規参加者へ自動10000GOLD付与 =====
-@bot.event
-async def on_member_join(member: discord.Member):
-    if member.bot:
-        return
-    try:
-        add_gold(member.id, 10000)
-        print(f"[JOIN] {member.display_name} に10000 GOLDを付与しました。")
-    except Exception as e:
-        print(f"新規メンバー初期GOLD付与エラー: {e}")
-
-# ===== 既存メンバーへ一括10000GOLD付与（初回起動時のみ） =====
-async def distribute_initial_gold():
-    FLAG_FILE = "initial_gold_flag.json"
-    if os.path.exists(FLAG_FILE):
-        return  # すでに配布済み
-
-    count = 0
-    for guild in bot.guilds:
-        for member in guild.members:
-            if member.bot:
-                continue
-            add_gold(member.id, 10000)
-            count += 1
-
-    with open(FLAG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"distributed": True, "count": count}, f, ensure_ascii=False, indent=4)
-
-    print(f"初回ボーナス: 既存メンバー {count} 名に10000 GOLDを配布しました。")
-
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== /a1_残高確認 =====
+# ---------------------------------------------------------
+# GOLD関連コマンド
+# ---------------------------------------------------------
 @bot.tree.command(name="a1_残高確認", description="所持GOLDを確認できます")
 async def a1_check_gold(interaction: discord.Interaction):
     balance = get_balance(interaction.user.id)
-    await interaction.response.send_message(
-        f"あなたの所持GOLDは **{balance} GOLD** です",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"あなたの所持GOLDは **{balance} GOLD** です", ephemeral=True)
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== /a2_送金 =====
 @bot.tree.command(name="a2_送金", description="他のユーザーにGOLDを送金します")
-@app_commands.describe(
-    相手="送金先ユーザー",
-    金額="送金するGOLDの額"
-)
+@app_commands.describe(相手="送金先ユーザー", 金額="送金するGOLDの額")
 async def a2_send_gold(interaction: discord.Interaction, 相手: discord.Member, 金額: int):
-    sender_id = str(interaction.user.id)
-    receiver_id = str(相手.id)
     sender_balance = get_balance(interaction.user.id)
-
     if 金額 <= 0:
         await interaction.response.send_message("送金額は1以上で指定してください。", ephemeral=True)
         return
     if sender_balance < 金額:
         await interaction.response.send_message("所持GOLDが足りません。", ephemeral=True)
         return
-    if sender_id == receiver_id:
+    if interaction.user.id == 相手.id:
         await interaction.response.send_message("自分自身には送金できません。", ephemeral=True)
         return
 
     add_gold(interaction.user.id, -金額)
     add_gold(相手.id, 金額)
-
-    await interaction.response.send_message(
-        f"{相手.display_name} に **{金額} GOLD** を送金しました",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"{相手.display_name} に **{金額} GOLD** を送金しました。", ephemeral=True)
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== /a3_ショップ =====
+# ---------------------------------------------------------
+# ショップ機能（装飾・称号・ロール）
+# ---------------------------------------------------------
 @bot.tree.command(name="a3_ショップ", description="任意の装飾、称号、ロールをつけられます　※PCのみ")
 @app_commands.describe(カテゴリ="ショップカテゴリを選択")
 @app_commands.choices(カテゴリ=[
@@ -660,14 +574,13 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
     balance = get_balance(interaction.user.id)
     cat = カテゴリ.value
 
-    # ==========================
+    # ======================
     # 装飾ショップ
-    # ==========================
+    # ======================
     if cat == "装飾":
         class DecoModal(discord.ui.Modal, title="装飾入力"):
             emoji_input = discord.ui.TextInput(
-                label="好きな絵文字を入力\n"
-                "（例：🔥、💎、カスタム絵文字も可能）",
+                label="好きな絵文字を入力（例：🔥、💎、カスタム絵文字も可）",
                 style=discord.TextStyle.short,
                 required=True
             )
@@ -701,39 +614,33 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
                 await modal_interaction.user.edit(nick=new_name.strip())
                 await modal_interaction.response.send_message(f"装飾を変更しました！ → {new_name}", ephemeral=True)
 
-        class DecoButton(discord.ui.Button):
-            def __init__(self):
-                super().__init__(label="装飾入力", style=discord.ButtonStyle.primary)
-
-            async def callback(self, button_interaction: discord.Interaction):
-                modal = DecoModal()
-                await button_interaction.response.send_modal(modal)
-                self.disabled = True
-                await button_interaction.message.edit(view=self.view)
-
         view = discord.ui.View()
-        view.add_item(DecoButton())
+        view.add_item(discord.ui.Button(label="装飾入力", style=discord.ButtonStyle.primary, custom_id="deco_button"))
+
+        async def button_callback(interaction_button: discord.Interaction):
+            modal = DecoModal()
+            await interaction_button.response.send_modal(modal)
+
+        for child in view.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id == "deco_button":
+                child.callback = button_callback
 
         msg = (
             f"**ようこそ！装飾ショップへ！**\n"
-            "「🔥名前🔥」名前を絵文字で装飾できます！\n"
-            "※PCのみ\n"
+            "「🔥名前🔥」のように名前を絵文字で装飾できます！\n"
             "\n"
             "**価格：1000 GOLD**\n"
-            f"（あなたの所持：{balance} GOLD）\n"
-            "\n"
-            "装飾を付ける場合は「装飾入力」ボタンを押してください"
+            f"（あなたの所持：{balance} GOLD）"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
-    # ==========================
+    # ======================
     # 称号ショップ
-    # ==========================
+    # ======================
     elif cat == "称号":
         class TitleModal(discord.ui.Modal, title="称号入力"):
             title_input = discord.ui.TextInput(
-                label="付けたい称号を入力\n"
-                "（例：勇者、伝説の竜騎士、破壊神 など）",
+                label="付けたい称号を入力（例：勇者、破壊神など）",
                 style=discord.TextStyle.short,
                 required=True
             )
@@ -742,7 +649,6 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
                 uid = modal_interaction.user.id
                 内容 = self.title_input.value.strip()
                 balance = get_balance(uid)
-
                 if balance < 3000:
                     await modal_interaction.response.send_message("GOLDが足りません。", ephemeral=True)
                     return
@@ -766,34 +672,29 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
                 await modal_interaction.user.edit(nick=new_name.strip())
                 await modal_interaction.response.send_message(f"称号を変更しました！ → {new_name}", ephemeral=True)
 
-        class TitleButton(discord.ui.Button):
-            def __init__(self):
-                super().__init__(label="称号入力", style=discord.ButtonStyle.success)
-
-            async def callback(self, button_interaction: discord.Interaction):
-                modal = TitleModal()
-                await button_interaction.response.send_modal(modal)
-                self.disabled = True
-                await button_interaction.message.edit(view=self.view)
-
         view = discord.ui.View()
-        view.add_item(TitleButton())
+        view.add_item(discord.ui.Button(label="称号入力", style=discord.ButtonStyle.success, custom_id="title_button"))
+
+        async def button_callback(interaction_button: discord.Interaction):
+            modal = TitleModal()
+            await interaction_button.response.send_modal(modal)
+
+        for child in view.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id == "title_button":
+                child.callback = button_callback
 
         msg = (
             f"**ようこそ！称号ショップへ！**\n"
             "「[称号] 名前」のように称号を付けられます！\n"
-            "※PCのみ\n"
             "\n"
             "**価格：3000 GOLD**\n"
-            f"（あなたの所持：{balance} GOLD）\n"
-            "\n"
-            "称号を付ける場合は「称号入力」ボタンを押してください"
+            f"（あなたの所持：{balance} GOLD）"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
-    # ==========================
+    # ======================
     # ロールショップ
-    # ==========================
+    # ======================
     elif cat == "ロール":
         class RoleModal(discord.ui.Modal, title="ロール購入"):
             num_input = discord.ui.TextInput(
@@ -805,7 +706,6 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
             async def on_submit(self, modal_interaction: discord.Interaction):
                 uid = modal_interaction.user.id
                 balance = get_balance(uid)
-
                 try:
                     num = int(self.num_input.value.strip())
                 except ValueError:
@@ -835,117 +735,109 @@ async def a3_shop(interaction: discord.Interaction, カテゴリ: app_commands.C
                 await modal_interaction.user.add_roles(role)
                 await modal_interaction.response.send_message(f"{role_name} を購入しました！", ephemeral=True)
 
-        class RoleButton(discord.ui.Button):
-            def __init__(self):
-                super().__init__(label="ロール購入", style=discord.ButtonStyle.primary)
-
-            async def callback(self, button_interaction: discord.Interaction):
-                modal = RoleModal()
-                await button_interaction.response.send_modal(modal)
-                self.disabled = True
-                await button_interaction.message.edit(view=self.view)
-
         view = discord.ui.View()
-        view.add_item(RoleButton())
+        view.add_item(discord.ui.Button(label="ロール購入", style=discord.ButtonStyle.primary, custom_id="role_button"))
+
+        async def button_callback(interaction_button: discord.Interaction):
+            modal = RoleModal()
+            await interaction_button.response.send_modal(modal)
+
+        for child in view.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id == "role_button":
+                child.callback = button_callback
 
         msg = (
             f"**ようこそ！ロールショップへ！**\n"
-            "\n"
             "1 🔥火属性🔥　500 GOLD\n"
             "2 💧水属性💧　500 GOLD\n"
             "3 🌪️風属性🌪️　500 GOLD\n"
             "4 🌱土属性🌱　500 GOLD\n"
-            "\n"
-            f"（あなたの所持：{balance} GOLD）\n"
-            "\n"
-            "ロールを付ける場合は「ロール購入」ボタンを押してください"
+            f"\n（あなたの所持：{balance} GOLD）"
         )
         await interaction.response.send_message(msg, view=view, ephemeral=True)
 
 
-
-# ------------------------------------------------------------------------------------------------------------
-# ===== /a4_リセット（装飾 / 称号 / ロール） =====
+# ---------------------------------------------------------
+# リセット機能（装飾／称号／ロール）
+# ---------------------------------------------------------
 @bot.tree.command(name="a4_リセット", description="付与した装飾・称号・ロールを削除します")
 @app_commands.describe(種類="リセットする項目を選択")
 @app_commands.choices(種類=[
     app_commands.Choice(name="装飾リセット", value="装飾"),
     app_commands.Choice(name="称号リセット", value="称号"),
-    app_commands.Choice(name="ロールリセット", value="ロール"),
+    app_commands.Choice(name="ロールリセット", value="ロール")
 ])
-async def a4_reset_items(interaction: discord.Interaction, 種類: app_commands.Choice[str]):
-    choice = 種類.value
+async def a4_reset(interaction: discord.Interaction, 種類: app_commands.Choice[str]):
     user = interaction.user
     old_name = user.display_name
     new_name = old_name
 
-    # 装飾リセット
-    if choice == "装飾":
+    # --- 装飾 ---
+    if 種類.value == "装飾":
         new_name = re.sub(r"^(<a?:\w+:\d+>|[\U0001F000-\U0010FFFF])+ ?", "", new_name)
-        new_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", new_name)
-        new_name = new_name.strip()
-        try:
-            await user.edit(nick=new_name)
-            await interaction.response.send_message(f"装飾を削除しました → `{new_name}`", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("ニックネームを変更する権限がありません。", ephemeral=True)
+        new_name = re.sub(r"( ?<a?:\w+:\d+>| ?[\U0001F000-\U0010FFFF])+?$", "", new_name).strip()
+        await user.edit(nick=new_name)
+        await interaction.response.send_message(f"装飾を削除しました → `{new_name}`", ephemeral=True)
         return
 
-    # 称号リセット
-    if choice == "称号":
+    # --- 称号 ---
+    if 種類.value == "称号":
         new_name = re.sub(r"^\[.*?\]\s*", "", new_name).strip()
-        try:
-            await user.edit(nick=new_name)
-            await interaction.response.send_message(f"称号を削除しました → `{new_name}`", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("ニックネームを変更する権限がありません。", ephemeral=True)
+        await user.edit(nick=new_name)
+        await interaction.response.send_message(f"称号を削除しました → `{new_name}`", ephemeral=True)
         return
 
-    # ロールリセット
-    if choice == "ロール":
-        removed_roles = []
+    # --- ロール ---
+    if 種類.value == "ロール":
         role_names = ["🔥火属性🔥", "💧水属性💧", "🌪️風属性🌪️", "🌱土属性🌱"]
-        for name in role_names:
-            role = discord.utils.get(interaction.guild.roles, name=name)
+        removed = []
+        for rname in role_names:
+            role = discord.utils.get(interaction.guild.roles, name=rname)
             if role and role in user.roles:
-                try:
-                    await user.remove_roles(role)
-                    removed_roles.append(name)
-                except discord.Forbidden:
-                    pass
-
-        if removed_roles:
-            await interaction.response.send_message(f"ロールを削除しました：{', '.join(removed_roles)}", ephemeral=True)
+                await user.remove_roles(role)
+                removed.append(rname)
+        if removed:
+            await interaction.response.send_message(f"ロールを削除しました：{', '.join(removed)}", ephemeral=True)
         else:
-            await interaction.response.send_message("削除対象のロールが見つかりませんでした。", ephemeral=True)
-        return
+            await interaction.response.send_message("削除対象のロールがありません。", ephemeral=True)
 
 
+# ---------------------------------------------------------
+# リマインドコマンド
+# ---------------------------------------------------------
+from datetime import datetime, timedelta
 
-# ------------------------------------------------------------------------------------------------------------
-# ===== リマインド =====
 @bot.tree.command(name="c1_リマインド", description="指定した時間または日付＋時間にリマインドを送ります（日本時間）")
-@app_commands.describe(時間または分後="「21:30」「11/03 21:30」または「15」など", メッセージ="リマインド内容")
+@app_commands.describe(
+    時間または分後="「21:30」「11/03 21:30」または「15」など（分後指定可）",
+    メッセージ="リマインド内容"
+)
 async def c1_remind(interaction: discord.Interaction, 時間または分後: str, メッセージ: str):
     await interaction.response.defer(ephemeral=True)
     now = datetime.now(JST)
 
+    # --- 「○分後」指定 ---
     if re.fullmatch(r"\d+", 時間または分後):
         minutes = int(時間または分後)
         remind_time = now + timedelta(minutes=minutes)
         wait_seconds = minutes * 60
+
+    # --- 「時刻指定 HH:MM」 ---
     elif re.fullmatch(r"\d{1,2}:\d{2}", 時間または分後):
         target = datetime.strptime(時間または分後, "%H:%M").replace(year=now.year, month=now.month, day=now.day, tzinfo=JST)
         if target < now:
             target += timedelta(days=1)
         remind_time = target
         wait_seconds = (remind_time - now).total_seconds()
+
+    # --- 「月日＋時刻指定 MM/DD HH:MM」 ---
     elif re.fullmatch(r"\d{1,2}/\d{1,2} \d{1,2}:\d{2}", 時間または分後):
         target = datetime.strptime(時間または分後, "%m/%d %H:%M").replace(year=now.year, tzinfo=JST)
         if target < now:
             target = target.replace(year=now.year + 1)
         remind_time = target
         wait_seconds = (remind_time - now).total_seconds()
+
     else:
         await interaction.followup.send("時間形式が無効です。", ephemeral=True)
         return
@@ -997,31 +889,26 @@ async def c1_remind(interaction: discord.Interaction, 時間または分後: str
     )
 
 
-# ------------------------------------------------------------------------------------------------------------
-# ===== 起動 =====
+# ---------------------------------------------------------
+# 起動イベント
+# ---------------------------------------------------------
 @bot.event
 async def on_ready():
-    load_data()
-    load_feeds()
+    load_all_data()
 
-    # 🔹 リアクションロール永続データの読み込み
+    # 🔹 リアクションロール設定ロード
     global reaction_role_data
-    if os.path.exists("reaction_roles.json"):
+    if os.path.exists(REACTION_FILE):
         try:
-            with open("reaction_roles.json", "r", encoding="utf-8") as f:
+            with open(REACTION_FILE, "r", encoding="utf-8") as f:
                 reaction_role_data = json.load(f)
             print(f"リアクションロール設定を {len(reaction_role_data)} 件ロードしました。")
         except Exception as e:
-            print(f"リアクションロールデータの読み込みに失敗しました: {e}")
+            print(f"リアクションロールデータの読み込み失敗: {e}")
             reaction_role_data = {}
-    else:
-        reaction_role_data = {}
-        print("リアクションロール設定ファイルが見つかりませんでした。新規作成します。")
 
     # 🔹 コマンド同期
     await bot.tree.sync()
-
-    # 🔹 起動ログ
     print(f"ログイン完了: {bot.user}")
     print(f"Communication Level: {'ON' if cl_data['enabled'] else 'OFF'}")
 
@@ -1031,9 +918,12 @@ async def on_ready():
     if not daily_gold_distribution.is_running():
         daily_gold_distribution.start()
 
-    # 🔹 初回ボーナス処理
+    # 🔹 初回ボーナス配布
     await distribute_initial_gold()
 
 
+# ---------------------------------------------------------
+# 常時稼働（Render対応）
+# ---------------------------------------------------------
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
