@@ -256,44 +256,68 @@ async def z2_cl_off(interaction: discord.Interaction):
     description="リアクションでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
-    メッセージ内容="表示するメッセージ（改行可：Shift+Enter）",
     絵文字とロール="『絵文字:ロール名』をカンマ区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
-    一人一つのみ="Trueで他のロールを自動解除"
+    複数選択="Trueで複数選択を許可、Falseで一人一つのみ"
 )
 @app_commands.default_permissions(manage_roles=True)
 async def reaction_role_setup(
     interaction: discord.Interaction,
-    メッセージ内容: str,
     絵文字とロール: str,
-    一人一つのみ: bool = False
+    複数選択: bool = True
 ):
     await interaction.response.defer(ephemeral=True)
+
     pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
     emoji_role_pairs = []
 
+    # --- 入力検証とロール自動生成 ---
     for p in pairs:
         if ":" not in p:
+            await interaction.followup.send(f"形式が不正です: {p}", ephemeral=True)
             return
         emoji, role_name = p.split(":", 1)
-        role = discord.utils.get(interaction.guild.roles, name=role_name.strip())
-        if role:
-            emoji_role_pairs.append((emoji.strip(), role))
+        role_name = role_name.strip()
 
-    msg = await interaction.channel.send(メッセージ内容)
-    for emoji, _ in emoji_role_pairs:
-        try:
-            await msg.add_reaction(emoji)
-        except discord.HTTPException:
-            pass
+        role = discord.utils.get(interaction.guild.roles, name=role_name)
+        if not role:
+            try:
+                role = await interaction.guild.create_role(name=role_name)
+                print(f"ロール自動生成: {role_name}")
+            except discord.Forbidden:
+                await interaction.followup.send(f"ロール {role_name} を作成できません（権限不足）", ephemeral=True)
+                return
+        emoji_role_pairs.append((emoji.strip(), role))
 
-    reaction_role_data[str(msg.id)] = {
-        "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
-        "exclusive": 一人一つのみ,
-        "guild_id": interaction.guild.id,
-    }
-    save_reaction_roles()
+    # --- メッセージ内容入力モーダル ---
+    class ReactionRoleMessageModal(discord.ui.Modal, title="リアクションロール：メッセージ入力"):
+        message_input = discord.ui.TextInput(
+            label="表示するメッセージ内容",
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
 
-# --- 追加リアクション ---
+        async def on_submit(self, modal_interaction: discord.Interaction):
+            content = self.message_input.value.strip()
+            msg = await modal_interaction.channel.send(content)
+            for emoji, _ in emoji_role_pairs:
+                try:
+                    await msg.add_reaction(emoji)
+                except discord.HTTPException:
+                    print(f"絵文字追加失敗: {emoji}")
+
+            # --- 設定データ保存 ---
+            reaction_role_data[str(msg.id)] = {
+                "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
+                "exclusive": not 複数選択,  # ← Trueなら排他モードOFF
+                "guild_id": interaction.guild.id,
+            }
+            save_reaction_roles()
+
+    await interaction.followup.send("メッセージ内容を入力してください。", ephemeral=True)
+    await interaction.followup.send_modal(ReactionRoleMessageModal())
+
+
+# --- リアクション追加 ---
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if str(payload.message_id) not in reaction_role_data:
@@ -301,28 +325,38 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
         return
 
-    data = reaction_role_data[str(payload.message_id)]
-    emoji = str(payload.emoji)
-    role_id = data["roles"].get(emoji)
-    if not role_id:
-        return
-
-    guild = bot.get_guild(int(data["guild_id"]))
-    member = guild.get_member(payload.user_id)
-    role = guild.get_role(role_id)
-    if not (member and role):
-        return
-
     try:
+        data = reaction_role_data[str(payload.message_id)]
+        emoji = str(payload.emoji)
+        role_id = data["roles"].get(emoji)
+        if not role_id:
+            return
+
+        guild = bot.get_guild(int(data["guild_id"]))
+        member = guild.get_member(payload.user_id)
+        role = guild.get_role(role_id)
+
+        if not role:
+            role = await guild.create_role(name=f"Role_{emoji}")
+            data["roles"][emoji] = role.id
+            save_reaction_roles()
+            print(f"ロール再生成: Role_{emoji}")
+
+        if not (member and role):
+            return
+
+        # --- 一人一つのみモード時の削除処理 ---
         if data.get("exclusive"):
             for rid in data["roles"].values():
                 if rid != role.id:
                     r = guild.get_role(rid)
-                    if r in member.roles:
+                    if r and r in member.roles:
                         await member.remove_roles(r)
+
         await member.add_roles(role)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"リアクション追加エラー: {e}")
+
 
 # --- リアクション削除 ---
 @bot.event
@@ -330,22 +364,23 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if str(payload.message_id) not in reaction_role_data:
         return
 
-    data = reaction_role_data[str(payload.message_id)]
-    emoji = str(payload.emoji)
-    role_id = data["roles"].get(emoji)
-    if not role_id:
-        return
-
-    guild = bot.get_guild(int(data["guild_id"]))
-    member = guild.get_member(payload.user_id)
-    role = guild.get_role(role_id)
-    if not (member and role):
-        return
-
     try:
+        data = reaction_role_data[str(payload.message_id)]
+        emoji = str(payload.emoji)
+        role_id = data["roles"].get(emoji)
+        if not role_id:
+            return
+
+        guild = bot.get_guild(int(data["guild_id"]))
+        member = guild.get_member(payload.user_id)
+        role = guild.get_role(role_id)
+
+        if not (member and role):
+            return
+
         await member.remove_roles(role)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"リアクション削除エラー: {e}")
 
 
 # ---------------------------------------------------------
@@ -805,14 +840,120 @@ async def a4_reset(interaction: discord.Interaction, 種類: app_commands.Choice
 # ---------------------------------------------------------
 # リマインドコマンド
 # ---------------------------------------------------------
-from datetime import datetime, timedelta
+# ---------------------------------------------------------
+# リマインド永続化設定
+# ---------------------------------------------------------
+REMINDERS_FILE = "reminders.json"
+reminders = {}
 
-@bot.tree.command(name="c1_リマインド", description="指定した時間または日付＋時間にリマインドを送ります（日本時間）")
+def load_reminders():
+    if os.path.exists(REMINDERS_FILE):
+        try:
+            with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"リマインド読み込み失敗: {e}")
+    return {}
+
+def save_reminders():
+    try:
+        with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(reminders, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"リマインド保存失敗: {e}")
+
+
+async def restore_reminders():
+    """Bot起動時に未完了のリマインドを復元"""
+    global reminders
+    reminders = load_reminders()
+    now = datetime.now(JST)
+    restored = 0
+
+    for rid, data in list(reminders.items()):
+        remind_time = datetime.fromisoformat(data["time"])
+        wait_seconds = (remind_time - now).total_seconds()
+        if wait_seconds <= 0:
+            del reminders[rid]
+            continue
+
+        async def remind_task(remind_id=rid, data=data):
+            try:
+                await asyncio.sleep(wait_seconds)
+                channel = bot.get_channel(data["channel_id"])
+                user = bot.get_user(data["user_id"])
+                if channel and user:
+                    webhook = await channel.create_webhook(name=user.display_name)
+                    await webhook.send(
+                        data["message"],
+                        username=user.display_name,
+                        avatar_url=user.display_avatar.url if user.display_avatar else None,
+                    )
+                    await asyncio.sleep(1)
+                    await webhook.delete()
+            except Exception as e:
+                print(f"復元リマインド送信エラー: {e}")
+            finally:
+                reminders.pop(remind_id, None)
+                save_reminders()
+
+        asyncio.create_task(remind_task())
+        restored += 1
+
+    if restored > 0:
+        print(f"🔁 復元したリマインド数: {restored}")
+    save_reminders()
+
+
+# ---------------------------------------------------------
+# おみくじ機能
+# ---------------------------------------------------------
+@bot.tree.command(name="おみくじ", description="おみくじを引きます")
+async def omikuji(interaction: discord.Interaction):
+    # 確率設定
+    fixed = {
+        "大大大吉": 0.01,
+        "大大吉": 0.03,
+        "鬼がかり 3000 BONUS": 0.01
+    }
+    others = ["大吉", "吉", "中吉", "小吉", "末吉", "凶", "大凶"]
+    rest = 1.0 - sum(fixed.values())
+    each = rest / len(others)
+    weights = {**fixed, **{o: each for o in others}}
+
+    result = random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+
+    # Embed作成（どの端末でも安定表示）
+    embed = discord.Embed(
+        title="🎴 おみくじの結果 🎴",
+        color=discord.Color.gold()
+    )
+
+    embed.description = f"# ﾎﾟｷｭｰｰﾝ!!\n# {result}"
+
+    # 特別結果：鬼がかり
+    if result == "鬼がかり 3000 BONUS":
+        add_gold(interaction.user.id, 3000)
+        embed.description = (
+            "# ﾎﾟｷｭｰｰﾝ!!\n"
+            "## ✨ **鬼がかり 3000 BONUS** ✨\n"
+            "### 💰 **3000GOLD GET!!!!!**"
+        )
+        embed.color = discord.Color.from_str("#FFD700")  # 明るい金色
+
+    embed.set_footer(text=f"{interaction.user.display_name} さんの運勢", icon_url=interaction.user.display_avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ---------------------------------------------------------
+# リマインドコマンド
+# ---------------------------------------------------------
+@bot.tree.command(name="c1_リマインド", description="指定した時間または日付＋時間にリマインドを送ります(日本時間)")
 @app_commands.describe(
-    時間または分後="「21:30」「11/03 21:30」または「15」など（分後指定可）",
-    メッセージ="リマインド内容"
+    時間または分後="「11/01 21:30」「21:30」または「15」(分後)など"
 )
-async def c1_remind(interaction: discord.Interaction, 時間または分後: str, メッセージ: str):
+async def c1_remind(interaction: discord.Interaction, 時間または分後: str):
     await interaction.response.defer(ephemeral=True)
     now = datetime.now(JST)
 
@@ -824,7 +965,9 @@ async def c1_remind(interaction: discord.Interaction, 時間または分後: str
 
     # --- 「時刻指定 HH:MM」 ---
     elif re.fullmatch(r"\d{1,2}:\d{2}", 時間または分後):
-        target = datetime.strptime(時間または分後, "%H:%M").replace(year=now.year, month=now.month, day=now.day, tzinfo=JST)
+        target = datetime.strptime(時間または分後, "%H:%M").replace(
+            year=now.year, month=now.month, day=now.day, tzinfo=JST
+        )
         if target < now:
             target += timedelta(days=1)
         remind_time = target
@@ -832,7 +975,9 @@ async def c1_remind(interaction: discord.Interaction, 時間または分後: str
 
     # --- 「月日＋時刻指定 MM/DD HH:MM」 ---
     elif re.fullmatch(r"\d{1,2}/\d{1,2} \d{1,2}:\d{2}", 時間または分後):
-        target = datetime.strptime(時間または分後, "%m/%d %H:%M").replace(year=now.year, tzinfo=JST)
+        target = datetime.strptime(時間または分後, "%m/%d %H:%M").replace(
+            year=now.year, tzinfo=JST
+        )
         if target < now:
             target = target.replace(year=now.year + 1)
         remind_time = target
@@ -844,49 +989,72 @@ async def c1_remind(interaction: discord.Interaction, 時間または分後: str
 
     remind_id = f"{interaction.user.id}-{remind_time.strftime('%Y%m%d%H%M%S')}"
 
-    async def remind_task():
-        try:
-            await asyncio.sleep(wait_seconds)
-            webhook = await interaction.channel.create_webhook(name=interaction.user.display_name)
-            await webhook.send(
-                メッセージ,
-                username=interaction.user.display_name,
-                avatar_url=interaction.user.display_avatar.url
+    # --- メッセージ入力モーダル ---
+    class ReminderMessageModal(discord.ui.Modal, title="リマインド内容入力"):
+        message_input = discord.ui.TextInput(
+            label="リマインドメッセージ（改行可：Shift+Enter）",
+            style=discord.TextStyle.paragraph,
+            required=True
+        )
+
+        async def on_submit(self, modal_interaction: discord.Interaction):
+            メッセージ = self.message_input.value.strip()
+
+            async def remind_task():
+                try:
+                    await asyncio.sleep(wait_seconds)
+                    webhook = await modal_interaction.channel.create_webhook(name=interaction.user.display_name)
+                    await webhook.send(
+                        メッセージ,
+                        username=interaction.user.display_name,
+                        avatar_url=interaction.user.display_avatar.url
+                    )
+                    await asyncio.sleep(1)
+                    await webhook.delete()
+                except Exception as e:
+                    print(f"リマインド送信エラー: {e}")
+                finally:
+                    reminders.pop(remind_id, None)
+                    save_reminders()
+
+            task = asyncio.create_task(remind_task())
+            reminders[remind_id] = {
+                "task": task,
+                "time": remind_time.isoformat(),
+                "message": メッセージ,
+                "user_id": modal_interaction.user.id,
+                "channel_id": modal_interaction.channel.id
+            }
+            save_reminders()
+
+            # --- 削除ボタン付きビュー ---
+            class CancelButton(discord.ui.View):
+                def __init__(self, user_id: int, remind_id: str):
+                    super().__init__(timeout=None)
+                    self.user_id = user_id
+                    self.remind_id = remind_id
+
+                @discord.ui.button(label="リマインドを削除", style=discord.ButtonStyle.danger)
+                async def cancel_button(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                    if interaction2.user.id != self.user_id:
+                        await interaction2.response.send_message("削除権限がありません。", ephemeral=True)
+                        return
+                    if self.remind_id in reminders:
+                        reminders[self.remind_id]["task"].cancel()
+                        del reminders[self.remind_id]
+                        save_reminders()
+                        await interaction2.response.edit_message(content="リマインドを削除しました。", view=None)
+                    else:
+                        await interaction2.response.send_message("このリマインドはすでに削除されています。", ephemeral=True)
+
+            view = CancelButton(interaction.user.id, remind_id)
+            await modal_interaction.response.send_message(
+                f"リマインドを設定しました：{remind_time.strftime('%m/%d %H:%M')}\n> {メッセージ}",
+                view=view,
+                ephemeral=True
             )
-            await asyncio.sleep(1)
-            await webhook.delete()
-        except Exception as e:
-            print(f"リマインド送信エラー: {e}")
-        finally:
-            reminders.pop(remind_id, None)
 
-    task = asyncio.create_task(remind_task())
-    reminders[remind_id] = {"task": task, "time": remind_time, "message": メッセージ}
-
-    class CancelButton(discord.ui.View):
-        def __init__(self, user_id: int, remind_id: str):
-            super().__init__(timeout=None)
-            self.user_id = user_id
-            self.remind_id = remind_id
-
-        @discord.ui.button(label="リマインドを削除", style=discord.ButtonStyle.danger)
-        async def cancel_button(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            if interaction2.user.id != self.user_id:
-                await interaction2.response.send_message("削除権限がありません。", ephemeral=True)
-                return
-            if self.remind_id in reminders:
-                reminders[self.remind_id]["task"].cancel()
-                del reminders[self.remind_id]
-                await interaction2.response.edit_message(content="リマインドを削除しました。", view=None)
-            else:
-                await interaction2.response.send_message("このリマインドはすでに削除されています。", ephemeral=True)
-
-    view = CancelButton(interaction.user.id, remind_id)
-    await interaction.followup.send(
-        f"リマインドを設定しました：{remind_time.strftime('%m/%d %H:%M')}\n> {メッセージ}",
-        view=view,
-        ephemeral=True
-    )
+    await interaction.followup.send_modal(ReminderMessageModal())
 
 
 # ---------------------------------------------------------
@@ -921,6 +1089,9 @@ async def on_ready():
     # 🔹 初回ボーナス配布
     await distribute_initial_gold()
 
+    # 🔹 リマインド復元
+    await restore_reminders()
+    print("🕓 リマインド復元完了")
 
 # ---------------------------------------------------------
 # 常時稼働（Render対応）
