@@ -545,17 +545,37 @@ class DeleteChannelButton(discord.ui.View):
 # ---------------------------------------------------------
 # ピン留め
 # ---------------------------------------------------------
-@bot.tree.command(name="x3_ピン留め設定", description="このチャンネルにピン留めを設定します【管理者のみ】")
-@app_commands.describe(メッセージ="ピン留め内容")
+@bot.tree.command(
+    name="x3_ピン留め設定",
+    description="このチャンネルにピン留めを設定します【管理者のみ】"
+)
 @app_commands.default_permissions(administrator=True)
-async def pin_set(interaction: discord.Interaction, メッセージ: str):
-    channel_id = str(interaction.channel.id)
-    auto_templates[channel_id] = メッセージ
-    save_templates()
-    await interaction.response.send_message("ピン留め設定しました。", ephemeral=True)
+async def pin_set(interaction: discord.Interaction):
 
+    class PinMessageModal(discord.ui.Modal, title="ピン留め内容入力"):
+        pin_input = discord.ui.TextInput(
+            label="ピン留め内容",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            placeholder="このチャンネルに常に表示したいテンプレートメッセージを入力"
+        )
 
-@bot.tree.command(name="x4_ピン留め停止", description="ピン留めを停止します【管理者のみ】")
+        async def on_submit(self, modal_interaction: discord.Interaction):
+            channel_id = str(modal_interaction.channel.id)
+            auto_templates[channel_id] = self.pin_input.value.strip()
+            save_templates()
+
+            await modal_interaction.response.send_message(
+                "ピン留めを設定しました。",
+                ephemeral=True
+            )
+
+    await interaction.response.send_modal(PinMessageModal())
+
+@bot.tree.command(
+    name="x4_ピン留め停止",
+    description="ピン留めを停止します【管理者のみ】"
+)
 @app_commands.default_permissions(administrator=True)
 async def pin_stop(interaction: discord.Interaction):
     channel_id = str(interaction.channel.id)
