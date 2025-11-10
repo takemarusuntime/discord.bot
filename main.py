@@ -402,6 +402,55 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     await member.remove_roles(role)
 
 
+# ---------------------------------------------------------
+# ✅ リアクションロールメッセージ編集コマンド（新追加）
+# ---------------------------------------------------------
+@bot.tree.command(
+    name="z3_リアクションロール編集",
+    description="作成済みリアクションロールメッセージの本文を編集します【管理者のみ】"
+)
+@app_commands.describe(
+    メッセージID="編集したいリアクションロールのメッセージID",
+    新しい本文="変更後のメッセージ内容"
+)
+@app_commands.default_permissions(manage_roles=True)
+async def reaction_role_edit(
+    interaction: discord.Interaction,
+    メッセージID: str,
+    新しい本文: str
+):
+    # ✅ 設定されたリアクションロールか確認
+    if メッセージID not in reaction_role_data:
+        await interaction.response.send_message(
+            "指定したメッセージIDはリアクションロールとして登録されていません。",
+            ephemeral=True
+        )
+        return
+
+    guild = interaction.guild
+    # ✅ メッセージを取得
+    try:
+        msg = await interaction.channel.fetch_message(int(メッセージID))
+    except:
+        await interaction.response.send_message(
+            "メッセージが見つかりません。このコマンドは同じチャンネル内で使用してください。",
+            ephemeral=True
+        )
+        return
+
+    # ✅ メッセージを編集
+    try:
+        await msg.edit(content=新しい本文)
+        await interaction.response.send_message(
+            f"メッセージID `{メッセージID}` の本文を編集しました。",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.response.send_message(
+            f"メッセージ編集に失敗しました: {e}",
+            ephemeral=True
+        )
+
 
 # ---------------------------------------------------------
 # 問い合わせチャンネル・削除機能
