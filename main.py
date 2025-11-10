@@ -767,56 +767,67 @@ async def check_feeds():
 
 
 # =========================================================
-# ✅ 残高確認（あなたの所持GOLDを確認）
+# ✅ GOLD グループコマンド
 # =========================================================
-@bot.tree.command(name="a3_残高確認", description="あなたの所持GOLDを確認します")
-async def a1_balance(interaction: discord.Interaction):
-    uid = interaction.user.id
-    amount = get_balance(uid)
+class GoldGroup(app_commands.Group):
+    def __init__(self):
+        super().__init__(name="a1_gold", description="GOLD関連コマンド")
 
-    await interaction.response.send_message(
-        f"あなたの所持GOLDは **{amount} GOLD** です。",
-        ephemeral=True
-    )
+    # ---------------------------------------------
+    # 残高確認
+    # ---------------------------------------------
+    @app_commands.command(name="残高確認", description="あなたの所持GOLDを確認します")
+    async def balance(self, interaction: discord.Interaction):
+        uid = interaction.user.id
+        amount = get_balance(uid)
 
-
-# =========================================================
-# ✅ 送金（任意ユーザーへGOLDを送信）
-# =========================================================
-@app_commands.describe(
-    ユーザー="送金相手",
-    GOLD="送金するGOLDの量"
-)
-@bot.tree.command(name="a4_送金", description="任意のユーザーにGOLDを送金します")
-async def a2_send(interaction: discord.Interaction, ユーザー: discord.Member, GOLD: int):
-
-    sender = str(interaction.user.id)
-    receiver = str(ユーザー.id)
-
-    # --- 数値チェック ---
-    if GOLD <= 0:
         await interaction.response.send_message(
-            "0以下の金額は送金できません。",
+            f"あなたの所持GOLDは {amount} GOLD です。",
             ephemeral=True
         )
-        return
 
-    # --- 所持金チェック ---
-    if get_balance(interaction.user.id) < GOLD:
+    # ---------------------------------------------
+    # 送金
+    # ---------------------------------------------
+    @app_commands.command(name="送金", description="任意のユーザーにGOLDを送金します")
+    @app_commands.describe(
+        ユーザー="送金相手",
+        GOLD="送金するGOLDの量"
+    )
+    async def send(
+        self,
+        interaction: discord.Interaction,
+        ユーザー: discord.Member,
+        GOLD: int
+    ):
+
+        # 不正チェック
+        if GOLD <= 0:
+            await interaction.response.send_message(
+                "0以下の金額は送金できません。",
+                ephemeral=True
+            )
+            return
+
+        if get_balance(interaction.user.id) < GOLD:
+            await interaction.response.send_message(
+                "所持GOLDが不足しています。",
+                ephemeral=True
+            )
+            return
+
+        # 送金処理
+        add_gold(interaction.user.id, -GOLD)
+        add_gold(ユーザー.id, GOLD)
+
         await interaction.response.send_message(
-            "所持GOLDが不足しています。",
+            f"{ユーザー.display_name} に {GOLD} GOLD を送金しました。",
             ephemeral=True
         )
-        return
 
-    # --- 送金処理 ---
-    add_gold(interaction.user.id, -GOLD)
-    add_gold(ユーザー.id, GOLD)
 
-    await interaction.response.send_message(
-        f"{ユーザー.display_name} に **{GOLD} GOLD** を送金しました。",
-        ephemeral=True
-    )
+# Bot にグループを登録
+bot.tree.add_command(GoldGroup())
 
 
 # =========================================================
