@@ -92,10 +92,12 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # ① GOLD
     gain = (len(message.content) // 2) * 10
     if gain > 0:
         add_gold(message.author.id, gain)
 
+    # ② CL
     if cl_data["enabled"]:
         uid = str(message.author.id)
         cl_data["users"].setdefault(uid, {"text": 0, "vc": 0})
@@ -103,6 +105,26 @@ async def on_message(message: discord.Message):
         save(DATA_CL, cl_data)
         await check_cl_role(message.author)
 
+    # ============================== ③ ピン留め 自動更新 ==============================
+    cid = str(message.channel.id)
+
+    if cid in pin_data:  # このチャンネルがピン留め対象なら
+        data = pin_data[cid]
+
+        try:
+            old_msg = await message.channel.fetch_message(int(data["message_id"]))
+            await old_msg.unpin()
+            await old_msg.delete()
+        except:
+            pass
+
+        new_msg = await message.channel.send(data["body"])
+        await new_msg.pin()
+
+        pin_data[cid]["message_id"] = new_msg.id
+        save_pin()
+
+    # ④ コマンド実行
     await bot.process_commands(message)
 
 @bot.event
@@ -543,49 +565,75 @@ class DeleteChannelButton(discord.ui.View):
         except:
             pass
 
-# ============================== ピン留め x3/x4 ==============================
-def load_pin(): return load(DATA_PIN, {})
-def save_pin(): save(DATA_PIN, pin_data)
+# ============================== ピン留め（自動更新） x3/x4 ==============================
+def load_pin():
+    return load(DATA_PIN, {})
+
+def save_pin():
+    save(DATA_PIN, pin_data)
+
 
 @bot.tree.command(
     name="x3_ピン留め設定",
-    description="このチャンネルに案内メッセージを固定します")
+    description="このチャンネルに自動更新ピン留めメッセージを設定します"
+)
 @app_commands.default_permissions(administrator=True)
 async def x3_pin(interaction: discord.Interaction):
+
     class PinBodyModal(discord.ui.Modal, title="ピン留め本文入力"):
         body = discord.ui.TextInput(label="本文（改行可）", style=discord.TextStyle.paragraph, required=True)
+
         async def on_submit(self, mi: discord.Interaction):
             cid = str(mi.channel.id)
+
+            # 古いピン留め削除
             old = pin_data.get(cid)
             if old:
                 try:
                     msg_old = await mi.channel.fetch_message(int(old["message_id"]))
+                    await msg_old.unpin()
                     await msg_old.delete()
                 except:
                     pass
-            msg = await mi.channel.send(self.body.value)
-            pin_data[cid] = {"message_id": msg.id, "body": self.body.value}
+
+            # 新しく投稿
+            new_msg = await mi.channel.send(self.body.value)
+            await new_msg.pin()
+
+            # 保存
+            pin_data[cid] = {"message_id": new_msg.id, "body": self.body.value}
             save_pin()
-            await mi.response.send_message("ピン留めメッセージを設定しました。", ephemeral=True)
+
+            await mi.response.send_message("✅ 自動更新ピン留めを設定しました。", ephemeral=True)
+
     await interaction.response.send_modal(PinBodyModal())
+
 
 @bot.tree.command(
     name="x4_ピン留め削除",
-    description="このチャンネルのピン留めを削除します")
+    description="このチャンネルの自動更新ピン留めを削除します"
+)
 @app_commands.default_permissions(administrator=True)
 async def x4_unpin(interaction: discord.Interaction):
     cid = str(interaction.channel.id)
+
     if cid not in pin_data:
-        await interaction.response.send_message("設定がありません。", ephemeral=True); return
-    ok = False
+        await interaction.response.send_message("ピン留めは設定されていません。", ephemeral=True)
+        return
+
+    # 既存ピン留め削除
     try:
         msg = await interaction.channel.fetch_message(int(pin_data[cid]["message_id"]))
-        await msg.delete(); ok = True
+        await msg.unpin()
+        await msg.delete()
     except:
         pass
+
     pin_data.pop(cid, None)
     save_pin()
-    await interaction.response.send_message("削除しました。" if ok else "記録のみ削除しました。", ephemeral=True)
+
+    await interaction.response.send_message("✅ 自動更新ピン留めを削除しました。", ephemeral=True)
+
 
 # ============================== on_ready ==============================
 @bot.event
