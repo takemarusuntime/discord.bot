@@ -265,15 +265,15 @@ async def z2_cl_off(interaction: discord.Interaction):
     await interaction.response.send_message("Communication Level機能をOFFにしました。", ephemeral=True)
 
 # ---------------------------------------------------------
-# ✅ リアクションロール設定コマンド
+# リアクションロール設定コマンド
 # ---------------------------------------------------------
 @bot.tree.command(
     name="x1_リアクションロール設定",
     description="リアクションでロールを付与するメッセージを作成します【管理者のみ】"
 )
 @app_commands.describe(
-    絵文字とロール="『絵文字:ロール名』をカンマ区切りで指定（例：1️⃣:猫,2️⃣:犬,3️⃣:鳥）",
-    複数選択="Trueで複数選択を許可、Falseで一人一つのみ"
+    絵文字とロール="『絵文字:ロール名』をカンマ区切りで指定（例：1️⃣:猫,2️⃣:犬）",
+    複数選択="True=複数選択可、False=一人一つ"
 )
 @app_commands.default_permissions(manage_roles=True)
 async def reaction_role_setup(
@@ -294,18 +294,10 @@ async def reaction_role_setup(
 
         role = discord.utils.get(interaction.guild.roles, name=role_name)
         if not role:
-            try:
-                role = await interaction.guild.create_role(name=role_name)
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    f"ロール {role_name} を作成できません（権限不足）",
-                    ephemeral=True
-                )
-                return
+            role = await interaction.guild.create_role(name=role_name)
 
         emoji_role_pairs.append((emoji.strip(), role))
 
-    # --- モーダル ---
     class ReactionMessageModal(discord.ui.Modal, title="リアクションロールメッセージ入力"):
         message_input = discord.ui.TextInput(
             label="メッセージ本文",
@@ -317,12 +309,14 @@ async def reaction_role_setup(
             content = self.message_input.value.strip()
             msg = await modal_interaction.channel.send(content)
 
+            # 反応追加
             for emoji, _ in emoji_role_pairs:
                 try:
                     await msg.add_reaction(emoji)
-                except discord.HTTPException:
+                except:
                     pass
 
+            # 保存
             reaction_role_data[str(msg.id)] = {
                 "roles": {emoji: role.id for emoji, role in emoji_role_pairs},
                 "exclusive": not 複数選択,
@@ -331,16 +325,12 @@ async def reaction_role_setup(
             save_reaction_roles()
 
             await modal_interaction.response.send_message(
-                f"リアクションロール設定完了！（ID: `{msg.id}`）",
+                f"設定完了！（ID: `{msg.id}`）",
                 ephemeral=True
             )
 
     await interaction.response.send_modal(ReactionMessageModal())
 
-
-# ---------------------------------------------------------
-# ✅ 完全統合版：リアクションロール付与（静かに処理）
-# ---------------------------------------------------------
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
@@ -352,32 +342,25 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     guild = bot.get_guild(payload.guild_id)
     member = guild.get_member(payload.user_id)
-
     data = reaction_role_data[msg_id]
     emoji = str(payload.emoji)
 
     if emoji not in data["roles"]:
         return
 
-    role_id = data["roles"][emoji]
-    role = guild.get_role(role_id)
+    role = guild.get_role(data["roles"][emoji])
     if not role:
         return
 
-    # ✅ 排他モード（複数選択禁止）
+    # 排他モード
     if data.get("exclusive"):
-        for e, rid in data["roles"].items():
-            r = guild.get_role(rid)
+        for e, r_id in data["roles"].items():
+            r = guild.get_role(r_id)
             if r and r in member.roles:
                 await member.remove_roles(r)
 
-    # ✅ 静かに付与
     await member.add_roles(role)
 
-
-# ---------------------------------------------------------
-# ✅ 完全統合版：リアクションロール解除（静かに処理）
-# ---------------------------------------------------------
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     msg_id = str(payload.message_id)
@@ -386,70 +369,103 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
     guild = bot.get_guild(payload.guild_id)
     member = guild.get_member(payload.user_id)
-
     data = reaction_role_data[msg_id]
     emoji = str(payload.emoji)
 
     if emoji not in data["roles"]:
         return
 
-    role_id = data["roles"][emoji]
-    role = guild.get_role(role_id)
+    role = guild.get_role(data["roles"][emoji])
     if not role:
         return
 
-    # ✅ 静かに削除
     await member.remove_roles(role)
 
-
-# ---------------------------------------------------------
-# ✅ リアクションロールメッセージ編集コマンド（新追加）
-# ---------------------------------------------------------
+# リアクションロール本文編集
 @bot.tree.command(
-    name="z3_リアクションロール編集",
-    description="作成済みリアクションロールメッセージの本文を編集します【管理者のみ】"
+    name="z3_リアクションロール本文編集",
+    description="リアクションロールメッセージの本文を編集します【管理者のみ】"
 )
 @app_commands.describe(
-    メッセージID="編集したいリアクションロールのメッセージID",
-    新しい本文="変更後のメッセージ内容"
+    メッセージID="編集するメッセージID",
+    新しい本文="差し替える本文"
 )
 @app_commands.default_permissions(manage_roles=True)
-async def reaction_role_edit(
-    interaction: discord.Interaction,
-    メッセージID: str,
-    新しい本文: str
-):
-    # ✅ 設定されたリアクションロールか確認
+async def reaction_role_edit_message(interaction: discord.Interaction, メッセージID: str, 新しい本文: str):
     if メッセージID not in reaction_role_data:
-        await interaction.response.send_message(
-            "指定したメッセージIDはリアクションロールとして登録されていません。",
-            ephemeral=True
-        )
+        await interaction.response.send_message("指定IDは登録されていません。", ephemeral=True)
         return
 
-    guild = interaction.guild
-    # ✅ メッセージを取得
     try:
         msg = await interaction.channel.fetch_message(int(メッセージID))
     except:
-        await interaction.response.send_message(
-            "メッセージが見つかりません。このコマンドは同じチャンネル内で使用してください。",
-            ephemeral=True
-        )
+        await interaction.response.send_message("このチャンネルではメッセージが見つかりません。", ephemeral=True)
         return
 
-    # ✅ メッセージを編集
+    await msg.edit(content=新しい本文)
+    await interaction.response.send_message("本文を更新しました。", ephemeral=True)
+
+# リアクションロール追加
+@bot.tree.command(
+    name="z4_リアクションロール追加",
+    description="既存リアクションロールに絵文字:ロール を追加します【管理者のみ】"
+)
+@app_commands.describe(
+    メッセージID="対象メッセージID",
+    絵文字="追加する絵文字",
+    ロール名="紐づけたいロール名（なければ自動作成）"
+)
+@app_commands.default_permissions(manage_roles=True)
+async def reaction_role_add(interaction: discord.Interaction, メッセージID: str, 絵文字: str, ロール名: str):
+    if メッセージID not in reaction_role_data:
+        await interaction.response.send_message("登録されていません。", ephemeral=True)
+        return
+
+    guild = interaction.guild
     try:
-        await msg.edit(content=新しい本文)
-        await interaction.response.send_message(
-            f"メッセージID `{メッセージID}` の本文を編集しました。",
-            ephemeral=True
-        )
-    except Exception as e:
-        await interaction.response.send_message(
-            f"メッセージ編集に失敗しました: {e}",
-            ephemeral=True
-        )
+        msg = await interaction.channel.fetch_message(int(メッセージID))
+    except:
+        await interaction.response.send_message("メッセージが見つかりません。", ephemeral=True)
+        return
+
+    role = discord.utils.get(guild.roles, name=ロール名)
+    if not role:
+        role = await guild.create_role(name=ロール名)
+
+    reaction_role_data[メッセージID]["roles"][絵文字] = role.id
+    save_reaction_roles()
+
+    try:
+        await msg.add_reaction(絵文字)
+    except:
+        pass
+
+    await interaction.response.send_message("追加しました。", ephemeral=True)
+
+# リアクションロール削除
+@bot.tree.command(
+    name="z5_リアクションロール削除",
+    description="指定した絵文字のリアクションロール設定を削除します【管理者のみ】"
+)
+@app_commands.describe(
+    メッセージID="対象メッセージID",
+    絵文字="削除する絵文字"
+)
+@app_commands.default_permissions(manage_roles=True)
+async def reaction_role_delete(interaction: discord.Interaction, メッセージID: str, 絵文字: str):
+    if メッセージID not in reaction_role_data:
+        await interaction.response.send_message("登録されていません。", ephemeral=True)
+        return
+
+    if 絵文字 not in reaction_role_data[メッセージID]["roles"]:
+        await interaction.response.send_message("その絵文字は設定されていません。", ephemeral=True)
+        return
+
+    del reaction_role_data[メッセージID]["roles"][絵文字]
+    save_reaction_roles()
+
+    await interaction.response.send_message("削除しました。", ephemeral=True)
+
 
 
 # ---------------------------------------------------------
