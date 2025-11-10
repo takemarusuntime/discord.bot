@@ -1,28 +1,22 @@
-import os
-import re
-import json
-import time
-import random
-import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+import asyncio, json, os, re, random, time
 from datetime import datetime, timedelta, timezone
 from datetime import time as dtime
 from keep_alive import keep_alive
 
-# ============================== 基本設定 ==============================
 JST = timezone(timedelta(hours=9))
 
+# ============================== Bot設定 ==============================
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.voice_states = True
 intents.reactions = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ============================== パス ==============================
+# ============================== ファイル ==============================
 DATA_CL     = "cl_data.json"
 DATA_GOLD   = "gold_data.json"
 DATA_REACT  = "reaction_roles.json"
@@ -34,12 +28,12 @@ INIT_FLAG   = "init_gold_flag.json"
 cl_data: dict = {"enabled": True, "users": {}}
 gold_data: dict = {}
 reaction_role_data: dict = {}
-pin_data: dict = {}            # {channel_id: {"message_id": int, "body": str}}
+pin_data: dict = {}          # {channel_id: {"message_id": int, "body": str}}
 reminders: dict = {}
 voice_sessions: dict = {}
 
-# ============================== ユーティリティ ==============================
-def load(path: str, default):
+# ============================== 共通I/O ==============================
+def load(path, default):
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -48,7 +42,7 @@ def load(path: str, default):
             pass
     return default
 
-def save(path: str, data):
+def save(path, data):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -59,15 +53,15 @@ def get_gold(uid: int) -> int:
     return gold_data.get(str(uid), 0)
 
 def add_gold(uid: int, amount: int):
-    k = str(uid)
-    gold_data[k] = gold_data.get(k, 0) + amount
+    uid_s = str(uid)
+    gold_data[uid_s] = gold_data.get(uid_s, 0) + amount
     save(DATA_GOLD, gold_data)
 
 @tasks.loop(time=dtime(hour=0, minute=0, tzinfo=JST))
 async def daily_gold():
     count = 0
-    for g in bot.guilds:
-        for m in g.members:
+    for guild in bot.guilds:
+        for m in guild.members:
             if not m.bot:
                 add_gold(m.id, 1000)
                 count += 1
@@ -84,15 +78,15 @@ async def initial_bonus():
     if os.path.exists(INIT_FLAG):
         return
     count = 0
-    for g in bot.guilds:
-        for m in g.members:
+    for guild in bot.guilds:
+        for m in guild.members:
             if not m.bot:
                 add_gold(m.id, 10000)
                 count += 1
     save(INIT_FLAG, {"done": True, "count": count})
     print(f"[初回配布] 既存{count}人へ10000G")
 
-# ============================== チャット / VC 報酬 ==============================
+# ============================== チャット/VC 報酬 ==============================
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -102,7 +96,7 @@ async def on_message(message: discord.Message):
     if gain > 0:
         add_gold(message.author.id, gain)
 
-    if cl_data.get("enabled", True):
+    if cl_data["enabled"]:
         uid = str(message.author.id)
         cl_data["users"].setdefault(uid, {"text": 0, "vc": 0})
         cl_data["users"][uid]["text"] += len(message.content)
@@ -119,14 +113,12 @@ async def on_voice_state_update(member: discord.Member, before, after):
 
     if before.channel is None and after.channel is not None:
         voice_sessions[uid] = time.time()
-
     elif before.channel is not None and after.channel is None:
-        start = voice_sessions.pop(uid, None)
-        if start is None:
-            return
-        minutes = int((time.time() - start) / 60)
-        if minutes > 0:
-            add_gold(member.id, minutes * 10)
+        if uid in voice_sessions:
+            minutes = int((time.time() - voice_sessions[uid]) / 60)
+            del voice_sessions[uid]
+            if minutes > 0:
+                add_gold(member.id, minutes * 10)
             cl_data["users"].setdefault(uid, {"text": 0, "vc": 0})
             cl_data["users"][uid]["vc"] += minutes
             save(DATA_CL, cl_data)
@@ -152,16 +144,15 @@ async def check_cl_role(member: discord.Member):
             achieved = lv
         else:
             break
-
     if not achieved:
         return
 
     guild = member.guild
-    role = discord.utils.get(guild.roles, name=achieved["name"])
-    if not role:
-        role = await guild.create_role(name=achieved["name"], color=discord.Color(achieved["color"]))
-    if role not in member.roles:
-        await member.add_roles(role)
+    target = discord.utils.get(guild.roles, name=achieved["name"])
+    if not target:
+        target = await guild.create_role(name=achieved["name"], color=discord.Color(achieved["color"]))
+    if target not in member.roles:
+        await member.add_roles(target)
 
     for lv in CL_LEVELS:
         if lv["name"] != achieved["name"]:
@@ -210,15 +201,15 @@ async def restore_reminders():
         asyncio.create_task(remind_task(rid, data, wait))
     save_reminders()
 
-async def remind_task(rid: str, data: dict, wait: float):
+async def remind_task(rid, data, wait):
     try:
         await asyncio.sleep(max(0, wait))
         channel = bot.get_channel(data["channel_id"])
         user = bot.get_user(data["user_id"])
         if channel and user:
-            wh = await channel.create_webhook(name=user.display_name)
-            await wh.send(data["message"], username=user.display_name, avatar_url=user.display_avatar.url)
-            await wh.delete()
+            webhook = await channel.create_webhook(name=user.display_name)
+            await webhook.send(data["message"], username=user.display_name, avatar_url=user.display_avatar.url)
+            await webhook.delete()
     except:
         pass
     finally:
@@ -226,20 +217,20 @@ async def remind_task(rid: str, data: dict, wait: float):
         save_reminders()
 
 @bot.tree.command(name="b2_remind_set", description="指定した時間にリマインドします")
-@app_commands.describe(時間または分後="例: 15 / 21:30 / 11/01 21:30")
-async def b2_remind(interaction: discord.Interaction, 時間または分後: str):
+@app_commands.describe(when="例: 15 / 21:30 / 11/01 21:30")
+async def b2_remind(interaction: discord.Interaction, when: str):
     await interaction.response.defer(ephemeral=True)
     now = datetime.now(JST)
 
-    if re.fullmatch(r"\d+", 時間または分後):
-        remind_time = now + timedelta(minutes=int(時間または分後))
-    elif re.fullmatch(r"\d{1,2}:\d{2}", 時間または分後):
-        t = datetime.strptime(時間または分後, "%H:%M")
+    if re.fullmatch(r"\d+", when):
+        remind_time = now + timedelta(minutes=int(when))
+    elif re.fullmatch(r"\d{1,2}:\d{2}", when):
+        t = datetime.strptime(when, "%H:%M")
         remind_time = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
         if remind_time < now:
             remind_time += timedelta(days=1)
-    elif re.fullmatch(r"\d{1,2}/\d{1,2} \d{1,2}:\d{2}", 時間または分後):
-        t = datetime.strptime(時間または分後, "%m/%d %H:%M")
+    elif re.fullmatch(r"\d{1,2}/\d{1,2} \d{1,2}:\d{2}", when):
+        t = datetime.strptime(when, "%m/%d %H:%M")
         remind_time = now.replace(month=t.month, day=t.day, hour=t.hour, minute=t.minute, second=0, microsecond=0)
         if remind_time < now:
             remind_time = remind_time.replace(year=now.year + 1)
@@ -251,18 +242,15 @@ async def b2_remind(interaction: discord.Interaction, 時間または分後: str
 
     class MsgModal(discord.ui.Modal, title="リマインド内容入力"):
         text = discord.ui.TextInput(label="内容", style=discord.TextStyle.paragraph, required=True)
-
         async def on_submit(self, mi: discord.Interaction):
             msg = self.text.value.strip()
             wait = (remind_time - datetime.now(JST)).total_seconds()
-
             asyncio.create_task(remind_task(remind_id, {
                 "message": msg,
                 "time": remind_time.isoformat(),
                 "user_id": mi.user.id,
                 "channel_id": mi.channel.id
             }, wait))
-
             reminders[remind_id] = {
                 "message": msg,
                 "time": remind_time.isoformat(),
@@ -272,9 +260,7 @@ async def b2_remind(interaction: discord.Interaction, 時間または分後: str
             save_reminders()
 
             class Cancel(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=None)
-
+                def __init__(self): super().__init__(timeout=None)
                 @discord.ui.button(label="リマインド削除", style=discord.ButtonStyle.danger)
                 async def del_btn(self, itx: discord.Interaction, _):
                     if remind_id in reminders:
@@ -292,30 +278,28 @@ async def b2_remind(interaction: discord.Interaction, 時間または分後: str
 
     await interaction.followup.send_modal(MsgModal())
 
-# ============================== Reaction Role: x1 / y1 / y2 / y3 ==============================
+# ============================== Reaction Role x1/y1/y2/y3 ==============================
 def load_reaction_roles():
     return load(DATA_REACT, {})
 
 def save_reaction_roles():
     save(DATA_REACT, reaction_role_data)
 
-@bot.tree.command(name="x1_reaction_setup", description="リアクションロールを新規作成（本文はモーダルで入力）")
-@app_commands.describe(
-    絵文字とロール="『絵文字:ロール名』をカンマ区切り（例：🔴:赤,🔵:青）",
-    複数選択="True=複数可 / False=一つのみ"
+@bot.tree.command(
+    name="x1_reaction_setup",
+    description="リアクションロールを新規作成（本文はモーダルで入力）"
 )
+@app_commands.describe(pairs="『絵文字:ロール名』をカンマ区切り（例：🔴:赤,🔵:青）", multi_select="True=複数可 / False=一つのみ")
 @app_commands.default_permissions(manage_roles=True)
-async def x1_rr_setup(interaction: discord.Interaction, 絵文字とロール: str, 複数選択: bool = True):
-    pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
+async def x1_rr_setup(interaction: discord.Interaction, pairs: str, multi_select: bool = True):
+    pair_list = [x.strip() for x in re.split("[,、]", pairs) if x.strip()]
     emoji_role_pairs = []
-
-    for p in pairs:
+    for p in pair_list:
         if ":" not in p:
             await interaction.response.send_message(f"形式が不正です: {p}", ephemeral=True)
             return
         emoji, role_name = p.split(":", 1)
         role_name = role_name.strip()
-
         role = discord.utils.get(interaction.guild.roles, name=role_name)
         if not role:
             try:
@@ -327,106 +311,83 @@ async def x1_rr_setup(interaction: discord.Interaction, 絵文字とロール: s
 
     class RRMessageModal(discord.ui.Modal, title="本文メッセージ入力"):
         body = discord.ui.TextInput(label="本文（改行可）", style=discord.TextStyle.paragraph, required=True)
-
         async def on_submit(self, mi: discord.Interaction):
-            sent = await mi.channel.send(self.body.value)
+            msg = await mi.channel.send(self.body.value)
             for e, _r in emoji_role_pairs:
                 try:
-                    await sent.add_reaction(e)
+                    await msg.add_reaction(e)
                 except discord.HTTPException:
                     pass
-
-            reaction_role_data[str(sent.id)] = {
+            reaction_role_data[str(msg.id)] = {
                 "guild_id": interaction.guild.id,
                 "channel_id": mi.channel.id,
-                "exclusive": (not 複数選択),
+                "exclusive": (not multi_select),
                 "roles": {e: r.id for e, r in emoji_role_pairs},
                 "message": self.body.value
             }
             save_reaction_roles()
-
             await mi.response.send_message(
-                f"作成完了: メッセージID {sent.id} / 排他: {'ON' if not 複数選択 else 'OFF'}",
+                f"作成完了: メッセージID {msg.id} / 排他: {'ON' if not multi_select else 'OFF'}",
                 ephemeral=True
             )
 
     await interaction.response.send_modal(RRMessageModal())
 
 @bot.tree.command(name="y1_reaction_add", description="既存のリアクションロールにペアを追加")
-@app_commands.describe(メッセージID="対象メッセージのID", 絵文字とロール="『絵文字:ロール名』をカンマ区切り")
+@app_commands.describe(message_id="対象メッセージのID", pairs="『絵文字:ロール名』をカンマ区切り")
 @app_commands.default_permissions(manage_roles=True)
-async def y1_rr_add(interaction: discord.Interaction, メッセージID: str, 絵文字とロール: str):
-    data = reaction_role_data.get(メッセージID)
+async def y1_rr_add(interaction: discord.Interaction, message_id: str, pairs: str):
+    data = reaction_role_data.get(message_id)
     if not data:
-        await interaction.response.send_message("対象が見つかりません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("対象が見つかりません。", ephemeral=True); return
     channel = bot.get_channel(int(data["channel_id"]))
     if not channel:
-        await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True); return
     try:
-        msg = await channel.fetch_message(int(メッセージID))
+        msg = await channel.fetch_message(int(message_id))
     except:
-        await interaction.response.send_message("メッセージ取得に失敗しました。", ephemeral=True)
-        return
+        await interaction.response.send_message("メッセージ取得に失敗しました。", ephemeral=True); return
 
-    pairs = [x.strip() for x in re.split("[,、]", 絵文字とロール) if x.strip()]
+    pair_list = [x.strip() for x in re.split("[,、]", pairs) if x.strip()]
     added = []
-
-    for p in pairs:
-        if ":" not in p:
-            continue
+    for p in pair_list:
+        if ":" not in p: continue
         emoji, role_name = p.split(":", 1)
         role_name = role_name.strip()
-
         role = discord.utils.get(interaction.guild.roles, name=role_name)
         if not role:
             try:
                 role = await interaction.guild.create_role(name=role_name)
             except discord.Forbidden:
                 continue
-
         data["roles"][emoji.strip()] = role.id
         try:
             await msg.add_reaction(emoji.strip())
         except:
             pass
-
         added.append(f"{emoji.strip()}:{role.name}")
 
-    reaction_role_data[メッセージID] = data
+    reaction_role_data[message_id] = data
     save_reaction_roles()
-
-    await interaction.response.send_message(
-        f"追加: {', '.join(added) if added else 'なし'}",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"追加: {', '.join(added) if added else 'なし'}", ephemeral=True)
 
 @bot.tree.command(name="y2_reaction_remove", description="既存のリアクションロールから絵文字を削除")
-@app_commands.describe(メッセージID="対象メッセージのID", 絵文字一覧="削除する絵文字をカンマ区切り（例：🔴,🔵）")
+@app_commands.describe(message_id="対象メッセージのID", emojis="削除する絵文字をカンマ区切り（例：🔴,🔵）")
 @app_commands.default_permissions(manage_roles=True)
-async def y2_rr_remove(interaction: discord.Interaction, メッセージID: str, 絵文字一覧: str):
-    data = reaction_role_data.get(メッセージID)
+async def y2_rr_remove(interaction: discord.Interaction, message_id: str, emojis: str):
+    data = reaction_role_data.get(message_id)
     if not data:
-        await interaction.response.send_message("対象が見つかりません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("対象が見つかりません。", ephemeral=True); return
     channel = bot.get_channel(int(data["channel_id"]))
     if not channel:
-        await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True); return
     try:
-        msg = await channel.fetch_message(int(メッセージID))
+        msg = await channel.fetch_message(int(message_id))
     except:
-        await interaction.response.send_message("メッセージ取得に失敗しました。", ephemeral=True)
-        return
+        await interaction.response.send_message("メッセージ取得に失敗しました。", ephemeral=True); return
 
-    targets = [x.strip() for x in re.split("[,、]", 絵文字一覧) if x.strip()]
+    targets = [x.strip() for x in re.split("[,、]", emojis) if x.strip()]
     removed = []
-
     for e in targets:
         if e in data["roles"]:
             data["roles"].pop(e, None)
@@ -439,53 +400,35 @@ async def y2_rr_remove(interaction: discord.Interaction, メッセージID: str,
             except:
                 pass
 
-    reaction_role_data[メッセージID] = data
+    reaction_role_data[message_id] = data
     save_reaction_roles()
-
-    await interaction.response.send_message(
-        f"削除: {', '.join(removed) if removed else 'なし'}",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"削除: {', '.join(removed) if removed else 'なし'}", ephemeral=True)
 
 @bot.tree.command(name="y3_reaction_edit", description="対象メッセージの本文を編集")
-@app_commands.describe(メッセージID="対象メッセージのID")
+@app_commands.describe(message_id="対象メッセージのID")
 @app_commands.default_permissions(manage_messages=True)
-async def y3_rr_edit_body(interaction: discord.Interaction, メッセージID: str):
-    data = reaction_role_data.get(メッセージID)
+async def y3_rr_edit_body(interaction: discord.Interaction, message_id: str):
+    data = reaction_role_data.get(message_id)
     if not data:
-        await interaction.response.send_message("対象が見つかりません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("対象が見つかりません。", ephemeral=True); return
     channel = bot.get_channel(int(data["channel_id"]))
     if not channel:
-        await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("チャンネルが見つかりません。", ephemeral=True); return
     try:
-        msg = await channel.fetch_message(int(メッセージID))
+        msg = await channel.fetch_message(int(message_id))
     except:
-        await interaction.response.send_message("メッセージ取得に失敗しました。", ephemeral=True)
-        return
+        await interaction.response.send_message("メッセージ取得に失敗しました。", ephemeral=True); return
 
     class EditBodyModal(discord.ui.Modal, title="本文編集"):
-        body = discord.ui.TextInput(
-            label="新しい本文（改行可）",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            default=data.get("message", "")
-        )
-
+        body = discord.ui.TextInput(label="新しい本文（改行可）", style=discord.TextStyle.paragraph, required=True, default=data.get("message", ""))
         async def on_submit(self, mi: discord.Interaction):
             try:
                 await msg.edit(content=self.body.value)
             except:
-                await mi.response.send_message("編集に失敗しました。", ephemeral=True)
-                return
-
+                await mi.response.send_message("編集に失敗しました。", ephemeral=True); return
             data["message"] = self.body.value
-            reaction_role_data[メッセージID] = data
+            reaction_role_data[message_id] = data
             save_reaction_roles()
-
             await mi.response.send_message("本文を更新しました。", ephemeral=True)
 
     await interaction.response.send_modal(EditBodyModal())
@@ -495,22 +438,15 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     mid = str(payload.message_id)
     if mid not in reaction_role_data or payload.user_id == bot.user.id:
         return
-
     d = reaction_role_data[mid]
     emoji = str(payload.emoji)
     role_id = d["roles"].get(emoji)
-    if not role_id:
-        return
-
+    if not role_id: return
     guild = bot.get_guild(int(d["guild_id"]))
-    if not guild:
-        return
-
+    if not guild: return
     member = guild.get_member(payload.user_id)
     role = guild.get_role(role_id)
-    if not member or not role:
-        return
-
+    if not member or not role: return
     try:
         if d.get("exclusive"):
             for rid in d["roles"].values():
@@ -527,22 +463,15 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     mid = str(payload.message_id)
     if mid not in reaction_role_data:
         return
-
     d = reaction_role_data[mid]
     emoji = str(payload.emoji)
     role_id = d["roles"].get(emoji)
-    if not role_id:
-        return
-
+    if not role_id: return
     guild = bot.get_guild(int(d["guild_id"]))
-    if not guild:
-        return
-
+    if not guild: return
     member = guild.get_member(payload.user_id)
     role = guild.get_role(role_id)
-    if not member or not role:
-        return
-
+    if not member or not role: return
     try:
         await member.remove_roles(role)
     except:
@@ -550,26 +479,24 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 # ============================== 問い合わせ /x2_ticket_setup ==============================
 @bot.tree.command(name="x2_ticket_setup", description="問い合わせボタンを設置（本文はモーダルで入力）")
-@app_commands.describe(対応ロール="対応するロール", ボタン名="カンマ区切り（例：質問,要望,申請）")
+@app_commands.describe(support_role="対応するロール", button_labels="カンマ区切り（例：質問,要望,申請）")
 @app_commands.default_permissions(administrator=True)
-async def x2_ticket_setup(interaction: discord.Interaction, 対応ロール: discord.Role, ボタン名: str):
-    labels = [x.strip() for x in re.split("[,、]", ボタン名) if x.strip()]
+async def x2_ticket_setup(interaction: discord.Interaction, support_role: discord.Role, button_labels: str):
+    labels = [x.strip() for x in re.split("[,、]", button_labels) if x.strip()]
     if not labels:
-        await interaction.response.send_message("ボタン名が空です。", ephemeral=True)
-        return
+        await interaction.response.send_message("ボタン名が空です。", ephemeral=True); return
 
     class TicketBodyModal(discord.ui.Modal, title="案内メッセージ入力"):
         body = discord.ui.TextInput(label="本文（改行可）", style=discord.TextStyle.paragraph, required=True)
-
         async def on_submit(self, mi: discord.Interaction):
-            view = InquiryButtonView(対応ロール, labels, self.body.value)
+            view = InquiryButtonView(support_role, labels, self.body.value)
             await mi.channel.send(self.body.value, view=view)
             await mi.response.send_message("問い合わせボタンを設置しました。", ephemeral=True)
 
     await interaction.response.send_modal(TicketBodyModal())
 
 class InquiryButtonView(discord.ui.View):
-    def __init__(self, role: discord.Role, labels: list[str], message: str):
+    def __init__(self, role, labels, message):
         super().__init__(timeout=None)
         self.role = role
         self.message = message
@@ -577,30 +504,27 @@ class InquiryButtonView(discord.ui.View):
             self.add_item(InquiryButton(label=label, role=role, message=message))
 
 class InquiryButton(discord.ui.Button):
-    def __init__(self, label: str, role: discord.Role, message: str):
+    def __init__(self, label, role, message):
         super().__init__(label=label, style=discord.ButtonStyle.primary)
         self.role = role
         self.message = message
-
     async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
         user = interaction.user
         category = interaction.channel.category
         name = f"{user.display_name}-{self.label}"
-
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
             self.role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
         }
-
         ch = await guild.create_text_channel(name=name, category=category, overwrites=overwrites)
         await ch.send(self.message, view=DeleteChannelButton())
         await interaction.response.send_message("チャンネルを作成しました。", ephemeral=True)
 
 class DeleteChannelButton(discord.ui.View):
     @discord.ui.button(label="チャンネルを削除する", style=discord.ButtonStyle.danger)
-    async def delete_channel(self, interaction: discord.Interaction, _button: discord.ui.Button):
+    async def delete_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("数秒後に削除します。", ephemeral=True)
         await asyncio.sleep(5)
         try:
@@ -608,22 +532,17 @@ class DeleteChannelButton(discord.ui.View):
         except:
             pass
 
-# ============================== ピン留め x3 / x4 ==============================
-def load_pin():
-    return load(DATA_PIN, {})
-
-def save_pin():
-    save(DATA_PIN, pin_data)
+# ============================== ピン留め x3/x4 ==============================
+def load_pin(): return load(DATA_PIN, {})
+def save_pin(): save(DATA_PIN, pin_data)
 
 @bot.tree.command(name="x3_pin_set", description="このチャンネルに案内メッセージを固定（本文はモーダル）")
 @app_commands.default_permissions(administrator=True)
 async def x3_pin(interaction: discord.Interaction):
     class PinBodyModal(discord.ui.Modal, title="ピン留め本文入力"):
         body = discord.ui.TextInput(label="本文（改行可）", style=discord.TextStyle.paragraph, required=True)
-
         async def on_submit(self, mi: discord.Interaction):
             cid = str(mi.channel.id)
-
             old = pin_data.get(cid)
             if old:
                 try:
@@ -631,13 +550,10 @@ async def x3_pin(interaction: discord.Interaction):
                     await msg_old.delete()
                 except:
                     pass
-
-            sent = await mi.channel.send(self.body.value)
-            pin_data[cid] = {"message_id": sent.id, "body": self.body.value}
+            msg = await mi.channel.send(self.body.value)
+            pin_data[cid] = {"message_id": msg.id, "body": self.body.value}
             save_pin()
-
             await mi.response.send_message("ピン留めメッセージを設定しました。", ephemeral=True)
-
     await interaction.response.send_modal(PinBodyModal())
 
 @bot.tree.command(name="x4_pin_delete", description="このチャンネルのピン留めを削除")
@@ -645,30 +561,21 @@ async def x3_pin(interaction: discord.Interaction):
 async def x4_unpin(interaction: discord.Interaction):
     cid = str(interaction.channel.id)
     if cid not in pin_data:
-        await interaction.response.send_message("設定がありません。", ephemeral=True)
-        return
-
+        await interaction.response.send_message("設定がありません。", ephemeral=True); return
     ok = False
     try:
         msg = await interaction.channel.fetch_message(int(pin_data[cid]["message_id"]))
-        await msg.delete()
-        ok = True
+        await msg.delete(); ok = True
     except:
         pass
-
     pin_data.pop(cid, None)
     save_pin()
+    await interaction.response.send_message("削除しました。" if ok else "記録のみ削除しました。", ephemeral=True)
 
-    await interaction.response.send_message(
-        "削除しました。" if ok else "記録のみ削除しました。",
-        ephemeral=True
-    )
-
-# ============================== 起動処理 ==============================
+# ============================== on_ready ==============================
 @bot.event
 async def on_ready():
     global cl_data, gold_data, reaction_role_data, pin_data
-
     cl_data = load(DATA_CL, {"enabled": True, "users": {}})
     gold_data = load(DATA_GOLD, {})
     reaction_role_data = load_reaction_roles()
@@ -684,6 +591,6 @@ async def on_ready():
     await restore_reminders()
     print("初期化完了")
 
-# ============================== 24/7 ==============================
+# ============================== 24/7起動 ==============================
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
