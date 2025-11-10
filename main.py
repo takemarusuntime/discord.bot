@@ -161,7 +161,11 @@ async def check_cl_role(member: discord.Member):
                 await member.remove_roles(r)
 
 # ============================== /b1_omikuji ==============================
-@bot.tree.command(name="b1_omikuji", description="おみくじを引きます")
+@bot.tree.command(
+    name="b1_omikuji",
+    name_localizations={"ja": "b1_おみくじ"},
+    description="おみくじを引きます",
+    description_localizations={"ja": "おみくじを引きます"})
 async def b1_omikuji(interaction: discord.Interaction):
     fixed = {"大大大吉": 0.01, "大大吉": 0.03, "鬼がかり 3000 BONUS": 0.01}
     others = ["大吉", "吉", "中吉", "小吉", "末吉", "凶", "大凶"]
@@ -216,7 +220,11 @@ async def remind_task(rid, data, wait):
         reminders.pop(rid, None)
         save_reminders()
 
-@bot.tree.command(name="b2_remind_set", description="指定した時間にリマインドします")
+@bot.tree.command(
+    name="b2_remind_set",
+    name_localizations={"ja": "b2_リマインド設定"},
+    description="指定した時間にリマインドします",
+    description_localizations={"ja": "指定した時間にリマインドします"})
 @app_commands.describe(when="例: 15 / 21:30 / 11/01 21:30")
 async def b2_remind(interaction: discord.Interaction, when: str):
     await interaction.response.defer(ephemeral=True)
@@ -287,8 +295,9 @@ def save_reaction_roles():
 
 @bot.tree.command(
     name="x1_reaction_setup",
-    description="リアクションロールを新規作成（本文はモーダルで入力）"
-)
+    name_localizations={"ja": "x1_リアクションロール設定"},
+    description="リアクションロールを新規作成します",
+    description_localizations={"ja": "リアクションロールを新規作成します"})
 @app_commands.describe(pairs="『絵文字:ロール名』をカンマ区切り（例：🔴:赤,🔵:青）", multi_select="True=複数可 / False=一つのみ")
 @app_commands.default_permissions(manage_roles=True)
 async def x1_rr_setup(interaction: discord.Interaction, pairs: str, multi_select: bool = True):
@@ -333,7 +342,11 @@ async def x1_rr_setup(interaction: discord.Interaction, pairs: str, multi_select
 
     await interaction.response.send_modal(RRMessageModal())
 
-@bot.tree.command(name="y1_reaction_add", description="既存のリアクションロールにペアを追加")
+@bot.tree.command(
+    name="y1_reaction_add",
+    name_localizations={"ja": "y1_リアクションロール追加"},
+    description="既存のリアクションロールに新しい項目を追加します",
+    description_localizations={"ja": "既存のリアクションロールに新しい項目を追加します"})
 @app_commands.describe(message_id="対象メッセージのID", pairs="『絵文字:ロール名』をカンマ区切り")
 @app_commands.default_permissions(manage_roles=True)
 async def y1_rr_add(interaction: discord.Interaction, message_id: str, pairs: str):
@@ -371,7 +384,11 @@ async def y1_rr_add(interaction: discord.Interaction, message_id: str, pairs: st
     save_reaction_roles()
     await interaction.response.send_message(f"追加: {', '.join(added) if added else 'なし'}", ephemeral=True)
 
-@bot.tree.command(name="y2_reaction_remove", description="既存のリアクションロールから絵文字を削除")
+@bot.tree.command(
+    name="y2_reaction_remove",
+    name_localizations={"ja": "y2_リアクションロール削除"},
+    description="既存のリアクションロールから項目を削除します",
+    description_localizations={"ja": "既存のリアクションロールから項目を削除します"})
 @app_commands.describe(message_id="対象メッセージのID", emojis="削除する絵文字をカンマ区切り（例：🔴,🔵）")
 @app_commands.default_permissions(manage_roles=True)
 async def y2_rr_remove(interaction: discord.Interaction, message_id: str, emojis: str):
@@ -404,7 +421,11 @@ async def y2_rr_remove(interaction: discord.Interaction, message_id: str, emojis
     save_reaction_roles()
     await interaction.response.send_message(f"削除: {', '.join(removed) if removed else 'なし'}", ephemeral=True)
 
-@bot.tree.command(name="y3_reaction_edit", description="対象メッセージの本文を編集")
+@bot.tree.command(
+    name="y3_reaction_edit",
+    name_localizations={"ja": "y3_リアクションロール本文編集"},
+    description="リアクションロールの本文を編集します",
+    description_localizations={"ja": "リアクションロールの本文を編集します"})
 @app_commands.describe(message_id="対象メッセージのID")
 @app_commands.default_permissions(manage_messages=True)
 async def y3_rr_edit_body(interaction: discord.Interaction, message_id: str):
@@ -478,7 +499,11 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         pass
 
 # ============================== 問い合わせ /x2_ticket_setup ==============================
-@bot.tree.command(name="x2_ticket_setup", description="問い合わせボタンを設置（本文はモーダルで入力）")
+@bot.tree.command(
+    name="x2_ticket_setup",
+    name_localizations={"ja": "x2_問い合わせ設定"},
+    description="問い合わせボタンを設置します",
+    description_localizations={"ja": "問い合わせボタンを設置します"})
 @app_commands.describe(support_role="対応するロール", button_labels="カンマ区切り（例：質問,要望,申請）")
 @app_commands.default_permissions(administrator=True)
 async def x2_ticket_setup(interaction: discord.Interaction, support_role: discord.Role, button_labels: str):
@@ -536,7 +561,11 @@ class DeleteChannelButton(discord.ui.View):
 def load_pin(): return load(DATA_PIN, {})
 def save_pin(): save(DATA_PIN, pin_data)
 
-@bot.tree.command(name="x3_pin_set", description="このチャンネルに案内メッセージを固定（本文はモーダル）")
+@bot.tree.command(
+    name="x3_pin_set",
+    name_localizations={"ja": "x3_ピン留め設定"},
+    description="ピン留めメッセージを設定します",
+    description_localizations={"ja": "ピン留めメッセージを設定します"})
 @app_commands.default_permissions(administrator=True)
 async def x3_pin(interaction: discord.Interaction):
     class PinBodyModal(discord.ui.Modal, title="ピン留め本文入力"):
@@ -556,7 +585,11 @@ async def x3_pin(interaction: discord.Interaction):
             await mi.response.send_message("ピン留めメッセージを設定しました。", ephemeral=True)
     await interaction.response.send_modal(PinBodyModal())
 
-@bot.tree.command(name="x4_pin_delete", description="このチャンネルのピン留めを削除")
+@bot.tree.command(
+    name="x4_pin_delete",
+    name_localizations={"ja": "x4_ピン留め削除"},
+    description="ピン留めメッセージを削除します",
+    description_localizations={"ja": "ピン留めメッセージを削除します"})
 @app_commands.default_permissions(administrator=True)
 async def x4_unpin(interaction: discord.Interaction):
     cid = str(interaction.channel.id)
