@@ -818,6 +818,106 @@ async def x4_unpin(interaction: discord.Interaction):
 
     await interaction.response.send_message("✅ 固定メッセージを削除しました。", ephemeral=True)
 
+
+# ============================== Guest / Member 管理 ==============================
+GUEST_ROLE_NAME = "Guest"
+MEMBER_ROLE_NAME = "Member"
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """新規メンバーが参加したら自動で Guest を付与"""
+    if member.bot:
+        return
+    guest = discord.utils.get(member.guild.roles, name=GUEST_ROLE_NAME)
+    if guest:
+        try:
+            await member.add_roles(guest, reason="新規ユーザー自動Guest付与")
+            print(f"[Guest付与] {member.display_name} に Guest を付与しました")
+        except Exception as e:
+            print(f"[Guest付与失敗] {e}")
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Member が付与されたら Guest を自動で外す"""
+    member_role = discord.utils.get(after.guild.roles, name=MEMBER_ROLE_NAME)
+    guest_role = discord.utils.get(after.guild.roles, name=GUEST_ROLE_NAME)
+
+    # 追加されたロールを抽出
+    added = [r for r in after.roles if r not in before.roles]
+
+    # Member が追加されたか？
+    if member_role and member_role in added:
+        if guest_role and guest_role in after.roles:
+            try:
+                await after.remove_roles(guest_role, reason="Member付与 → Guest解除")
+                print(f"[Guest解除] {after.display_name} から Guest を削除")
+            except Exception as e:
+                print(f"[Guest解除失敗] {e}")
+
+
+# ============================== ルール同意ボタン ==============================
+AGREE_BUTTON_MESSAGE = (
+    "# ルールへの同意\n"
+    "以下のボタンを押すと **ルールに同意したもの** とみなされ、全チャンネルが解放されます"
+)
+
+AGREE_BUTTON_LABEL = "✅ 同意"
+MEMBER_ROLE_NAME = "Member"
+
+
+class AgreeButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        # ボタン追加
+        self.add_item(
+            discord.ui.Button(
+                label=AGREE_BUTTON_LABEL,
+                style=discord.ButtonStyle.success,
+                custom_id="agree_button"
+            )
+        )
+
+    @discord.ui.button(label=AGREE_BUTTON_LABEL, style=discord.ButtonStyle.success, custom_id="agree_button")
+    async def agree(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        member = interaction.user
+        guild = interaction.guild
+
+        member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
+        if not member_role:
+            # Member ロールが無ければ自動作成
+            member_role = await guild.create_role(name=MEMBER_ROLE_NAME)
+            print("[AUTO] Member ロールが無かったため自動作成")
+
+        # すでにMemberだった
+        if member_role in member.roles:
+            return await interaction.response.send_message("既に認証済みです。", ephemeral=True)
+
+        # 付与
+        await member.add_roles(member_role, reason="ルール同意による認証")
+
+        # Guest 削除は既に on_member_update が自動的に処理する
+        await interaction.response.send_message("✅ 認証完了しました。ようこそ！", ephemeral=True)
+
+
+# ============================== 同意ボタン設置コマンド ==============================
+@bot.tree.command(
+    name="z3_認証ボタン設置",
+    description="ルールチャンネルに「同意する」ボタンを設置します（管理者専用）"
+)
+@app_commands.default_permissions(administrator=True)
+async def setup_agree_button(interaction: discord.Interaction):
+
+    # メッセージ送信
+    await interaction.channel.send(
+        AGREE_BUTTON_MESSAGE,
+        view=AgreeButton()
+    )
+
+    await interaction.response.send_message("✅ 認証ボタンを設置しました。", ephemeral=True)
+
+
 # ============================== on_ready ==============================
 @bot.event
 async def on_ready():
