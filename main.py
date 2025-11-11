@@ -857,11 +857,11 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 # ============================== ルール同意ボタン ==============================
 AGREE_BUTTON_MESSAGE = (
-    "# ルールへの同意\n"
-    "以下のボタンを押すと **ルールに同意したもの** とみなされ、全チャンネルが解放されます"
+    "# サーバールールへの同意\n"
+    "以下のボタンを押すと **利用規約に同意したもの** とみなされ、Member 権限が付与されます。"
 )
 
-AGREE_BUTTON_LABEL = "✅ 同意"
+AGREE_BUTTON_LABEL = "✅ 同意する"
 MEMBER_ROLE_NAME = "Member"
 
 
@@ -869,16 +869,11 @@ class AgreeButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-        # ボタン追加
-        self.add_item(
-            discord.ui.Button(
-                label=AGREE_BUTTON_LABEL,
-                style=discord.ButtonStyle.success,
-                custom_id="agree_button"
-            )
-        )
-
-    @discord.ui.button(label=AGREE_BUTTON_LABEL, style=discord.ButtonStyle.success, custom_id="agree_button")
+    @discord.ui.button(
+        label=AGREE_BUTTON_LABEL,
+        style=discord.ButtonStyle.success,
+        custom_id="agree_button"
+    )
     async def agree(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         member = interaction.user
@@ -886,36 +881,36 @@ class AgreeButton(discord.ui.View):
 
         member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
         if not member_role:
-            # Member ロールが無ければ自動作成
             member_role = await guild.create_role(name=MEMBER_ROLE_NAME)
-            print("[AUTO] Member ロールが無かったため自動作成")
+            print("[AUTO] Member ロールを自動作成しました。")
 
-        # すでにMemberだった
         if member_role in member.roles:
             return await interaction.response.send_message("既に認証済みです。", ephemeral=True)
 
-        # 付与
         await member.add_roles(member_role, reason="ルール同意による認証")
-
-        # Guest 削除は既に on_member_update が自動的に処理する
-        await interaction.response.send_message("✅ 認証完了しました。ようこそ！", ephemeral=True)
+        await interaction.response.send_message("✅ 認証が完了しました。", ephemeral=True)
 
 
-# ============================== 同意ボタン設置コマンド ==============================
+# ============================== 認証ボタン設置コマンド ==============================
 @bot.tree.command(
-    name="z3_認証ボタン設置",
-    description="ルールチャンネルに「同意する」ボタンを設置します（管理者専用）"
+    name="認証ボタン設置",
+    description="ルールチャンネルに認証ボタンを設置します（管理者専用）"
 )
 @app_commands.default_permissions(administrator=True)
 async def setup_agree_button(interaction: discord.Interaction):
 
-    # メッセージ送信
+    # ✅ 最初に返答（必須）
+    await interaction.response.defer(ephemeral=True)
+
+    # ✅ ボタン付きメッセージ送信
     await interaction.channel.send(
         AGREE_BUTTON_MESSAGE,
         view=AgreeButton()
     )
 
-    await interaction.response.send_message("✅ 認証ボタンを設置しました。", ephemeral=True)
+    # ✅ 完了メッセージ
+    await interaction.followup.send("✅ 認証ボタンを設置しました。", ephemeral=True)
+
 
 
 # ============================== on_ready ==============================
