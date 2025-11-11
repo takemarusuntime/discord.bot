@@ -758,7 +758,7 @@ def save_pin():
 # ============================== x3_ピン留め設定 ==============================
 @bot.tree.command(
     name="x3_ピン留め設定",
-    description="このチャンネルの固定メッセージを設定します（Bot独自）"
+    description="このチャンネルの固定メッセージを設定します"
 )
 @app_commands.default_permissions(administrator=True)
 async def x3_pin(interaction: discord.Interaction):
@@ -797,7 +797,7 @@ async def x3_pin(interaction: discord.Interaction):
 # ============================== x4_ピン留め削除 ==============================
 @bot.tree.command(
     name="x4_ピン留め削除",
-    description="このチャンネルの固定メッセージを削除します（Bot独自）"
+    description="このチャンネルの固定メッセージを削除します"
 )
 @app_commands.default_permissions(administrator=True)
 async def x4_unpin(interaction: discord.Interaction):
@@ -857,8 +857,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 # ============================== ルール同意ボタン ==============================
 AGREE_BUTTON_MESSAGE = (
-    "# サーバールールへの同意\n"
-    "以下のボタンを押すと **利用規約に同意したもの** とみなされ、Member 権限が付与されます。"
+    "### サーバールールへの同意\n"
+    "以下のボタンを押すと **ルールに同意したもの** とみなされ、チャンネルが解放されます"
 )
 
 AGREE_BUTTON_LABEL = "✅ 同意する"
