@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from datetime import time as dtime
 from keep_alive import keep_alive
 
+keep_alive()
+
 JST = timezone(timedelta(hours=9))
 
 # ============================== Bot設定 ==============================
