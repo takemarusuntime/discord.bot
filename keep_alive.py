@@ -1,4 +1,3 @@
-# keep_alive.py
 from flask import Flask
 from threading import Thread
 import os
@@ -14,7 +13,6 @@ def healthz():
     return "OK", 200
 
 def run():
-    # ⭐ ここが超重要
     port = int(os.environ.get("PORT", 8080))
     print(f"### Flask starting on port {port} ###")
     app.run(host="0.0.0.0", port=port)
