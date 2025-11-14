@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 import asyncio, json, os, re, random, time
 from datetime import datetime, timedelta, timezone
 from datetime import time as dtime
-from keep_alive import keep_alive
+from keepalive import keep_alive
 
 JST = timezone(timedelta(hours=9))
 
