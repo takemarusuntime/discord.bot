@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from datetime import time as dtime
 from keep_alive import keep_alive
 
+keep_alive()
+
 JST = timezone(timedelta(hours=9))
 
 # ============================== Bot設定 ==============================
@@ -942,5 +944,4 @@ async def on_ready():
     print("✅ 起動処理完了")
 
 # ============================== 24時間稼働 ==============================
-keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))

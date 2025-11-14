@@ -5,24 +5,21 @@ import os
 
 app = Flask(__name__)
 
-# Render が確認するルート
 @app.route("/")
 def home():
     return "Alive"
 
-# Render の Health Check が叩く場所（必須）
 @app.route("/healthz")
 def healthz():
     return "OK", 200
 
-
 def run():
-    # Render が環境変数 PORT を渡す ⇒ これを使わないと不安定になる
+    # ⭐ ここが超重要
     port = int(os.environ.get("PORT", 8080))
+    print(f"### Flask starting on port {port} ###")
     app.run(host="0.0.0.0", port=port)
 
-
 def keep_alive():
-    thread = Thread(target=run)
-    thread.daemon = True
-    thread.start()
+    t = Thread(target=run)
+    t.daemon = True
+    t.start()
