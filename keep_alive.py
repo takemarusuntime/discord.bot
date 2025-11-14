@@ -9,7 +9,7 @@ def home():
     return "I'm alive"
 
 def run():
-    port = int(os.environ.get("PORT", 10000))  # ★Render はこの PORT を使う
+    port = int(os.environ.get("PORT", 10000))  # ← Render が割り当てるポート
     app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
