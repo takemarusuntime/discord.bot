@@ -1,20 +1,17 @@
-import os
-from flask import Flask
+# keep_alive.py
+import flask
 from threading import Thread
 
-app = Flask(__name__)
+app = flask.Flask('')
 
-@app.route("/")
+@app.route('/')
 def home():
-    return "I'm alive"
+    return "Alive"
 
 def run():
-    port = int(os.environ.get("PORT", 10000))  # ← Render が割り当てるポート
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
     t = Thread(target=run)
     t.daemon = True
     t.start()
-
-#a
