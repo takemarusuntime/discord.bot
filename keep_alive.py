@@ -1,17 +1,28 @@
 # keep_alive.py
-import flask
+from flask import Flask
 from threading import Thread
+import os
 
-app = flask.Flask('')
+app = Flask(__name__)
 
-@app.route('/')
+# Render が確認するルート
+@app.route("/")
 def home():
     return "Alive"
 
+# Render の Health Check が叩く場所（必須）
+@app.route("/healthz")
+def healthz():
+    return "OK", 200
+
+
 def run():
-    app.run(host='0.0.0.0', port=8080)
+    # Render が環境変数 PORT を渡す ⇒ これを使わないと不安定になる
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
 
 def keep_alive():
-    t = Thread(target=run)
-    t.daemon = True
-    t.start()
+    thread = Thread(target=run)
+    thread.daemon = True
+    thread.start()
