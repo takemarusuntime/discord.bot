@@ -157,12 +157,12 @@ async def on_voice_state_update(member, before, after):
 
 # ============================== Communication Level ==============================
 CL_LEVELS = [
-    {"name": "Communication Level 1", "text": 10,   "vc": 30,    "color": 0x999999},
-    {"name": "Communication Level 2", "text": 50,   "vc": 180,   "color": 0x55FF55},
-    {"name": "Communication Level 3", "text": 100,  "vc": 720,   "color": 0x3333FF},
-    {"name": "Communication Level 4", "text": 333,  "vc": 1440,  "color": 0x8800FF},
-    {"name": "Communication Level 5", "text": 666,  "vc": 7200,  "color": 0xFFFF00},
-    {"name": "Communication Level 6", "text": 1000, "vc": 14400, "color": 0xFF5555},
+    {"name": "Communication Level 1", "text": 10,   "vc": 60,    "color": 0x999999},
+    {"name": "Communication Level 2", "text": 50,   "vc": 720,   "color": 0x55FF55},
+    {"name": "Communication Level 3", "text": 100,  "vc": 1440,   "color": 0x3333FF},
+    {"name": "Communication Level 4", "text": 333,  "vc": 10080,  "color": 0x8800FF},
+    {"name": "Communication Level 5", "text": 666,  "vc": 20160,  "color": 0xFFFF00},
+    {"name": "Communication Level 6", "text": 1000, "vc": 43200, "color": 0xFF5555},
 ]
 
 async def check_cl_role(member):
