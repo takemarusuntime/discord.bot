@@ -739,9 +739,9 @@ async def b2_remind(interaction: discord.Interaction, when: str):
 )
 @app_commands.choices(
     操作=[
-        app_commands.Choice(name="coin残高確認", value="check"),
-        app_commands.Choice(name="coin貸出（gold → coin）", value="lend"),
-        app_commands.Choice(name="coin返却（coin → gold）", value="return")
+        app_commands.Choice(name="COIN残高確認", value="check"),
+        app_commands.Choice(name="COIN貸出（gold → coin）", value="lend"),
+        app_commands.Choice(name="COIN返却（coin → gold）", value="return")
     ]
 )
 async def casino_coin(
@@ -762,7 +762,7 @@ async def casino_coin(
     if 操作.value == "check":
 
         embed = discord.Embed(
-            title="coin残高確認",
+            title="COIN残高確認",
             description=f"現在のCOIN： **{user_coin} COIN**",
             color=discord.Color.blue()
         )
