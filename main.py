@@ -89,6 +89,25 @@ async def initial_bonus():
     save(INIT_FLAG, {"done": True})
     print(f"[初回配布] {cnt}人へ10000 GOLD")
 
+
+DATA_COIN = "coin_data.json"
+
+def load_coin():
+    if os.path.exists(DATA_COIN):
+        try:
+            with open(DATA_COIN, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_coin(data):
+    tmp = DATA_COIN + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DATA_COIN)
+
+
 # ============================== チャット / VC 報酬 ==============================
 @bot.event
 async def on_message(message):
@@ -196,6 +215,89 @@ async def check_cl_role(member):
             r = discord.utils.get(guild.roles, name=lv["name"])
             if r and r in member.roles:
                 await member.remove_roles(r)
+
+
+# GOLD残高確認
+@bot.tree.command(
+    name="a1_GOLD残高確認",
+    description="あなたのGOLD残高を確認します"
+)
+async def gold_balance(interaction: discord.Interaction):
+
+    uid = str(interaction.user.id)
+    balance = gold_data.get(uid, 0)
+
+    embed = discord.Embed(
+        title="GOLD残高確認",
+        description=(
+            f"【名前】 {interaction.user.display_name}\n"
+            f"【現在のGOLD】 {balance} G"
+        ),
+        color=discord.Color.gold()
+    )
+
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# GOLD送金
+@bot.tree.command(
+    name="a2_GOLD送金",
+    description="GOLDを他のユーザーに送金します"
+)
+@app_commands.describe(
+    相手="送金相手のユーザー",
+    金額="送金するGOLDの金額（1以上）"
+)
+async def gold_send(interaction: discord.Interaction, 相手: discord.Member, 金額: int):
+
+    sender_id = str(interaction.user.id)
+    receiver_id = str(相手.id)
+
+    # ===== 自己送金防止 =====
+    if sender_id == receiver_id:
+        await interaction.response.send_message("自分自身には送金できません。", ephemeral=True)
+        return
+
+    # ===== 金額チェック =====
+    if 金額 <= 0:
+        await interaction.response.send_message("送金額は1以上で指定してください。", ephemeral=True)
+        return
+
+    # ===== GOLD残高確認 =====
+    sender_gold = gold_data.get(sender_id, 0)
+    if sender_gold < 金額:
+        await interaction.response.send_message("ウォレット残高が不足しています。", ephemeral=True)
+        return
+
+    # ===== 相手の初期データ保証 =====
+    if receiver_id not in gold_data:
+        gold_data[receiver_id] = 0
+
+    # ===== 送金実行 =====
+    gold_data[sender_id] -= 金額
+    gold_data[receiver_id] += 金額
+
+    # ===== 保存 =====
+    save(DATA_GOLD, gold_data)
+
+    # ===== 完了メッセージ =====
+    embed = discord.Embed(
+        title="GOLD送金 完了",
+        description=(
+            f"【送金者】 {interaction.user.display_name}\n"
+            f"【受取者】 {相手.display_name}\n"
+            f"【送金額】 {金額} G\n\n"
+            f"送金が正常に完了しました。"
+        ),
+        color=discord.Color.green()
+    )
+
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 # ============================== /b1_おみくじ ==============================
 import random
@@ -604,6 +706,139 @@ async def b2_remind(interaction: discord.Interaction, when: str):
             )
 
     await interaction.followup.send_modal(MsgModal())
+
+
+# casino---------------------------------------------------------------
+
+
+@bot.tree.command(
+    name="c1_casino_coin",
+    description="COINメニュー（残高確認・貸出・返却）"
+)
+@app_commands.describe(
+    操作="実行したい操作を選択します",
+    数量="貸出または返却する COIN の量（残高確認は不要）"
+)
+@app_commands.choices(
+    操作=[
+        app_commands.Choice(name="COIN残高確認", value="check"),
+        app_commands.Choice(name="COIN貸出（GOLD → COIN）", value="lend"),
+        app_commands.Choice(name="COIN返却（COIN → GOLD）", value="return")
+    ]
+)
+async def casino_coin(
+    interaction: discord.Interaction,
+    操作: app_commands.Choice[str],
+    数量: int = None
+):
+
+    uid = str(interaction.user.id)
+
+    coin_data = load_coin()
+    user_coin = coin_data.get(uid, 0)
+    user_gold = gold_data.get(uid, 0)
+
+    # ================================
+    # 🎫 COIN残高確認
+    # ================================
+    if 操作.value == "check":
+
+        embed = discord.Embed(
+            title="COIN残高確認",
+            description=f"現在のCOIN： **{user_coin} COIN**",
+            color=discord.Color.blue()
+        )
+
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    # 数量が必要な操作はチェック
+    if 数量 is None or 数量 <= 0:
+        await interaction.response.send_message("1以上の数量を指定してください。", ephemeral=True)
+        return
+
+    # ================================
+    # 💱 COIN貸出（GOLD → COIN）
+    # ================================
+    if 操作.value == "lend":
+
+        want_coin = 数量
+        need_gold = want_coin * 20
+
+        if user_gold < need_gold:
+            await interaction.response.send_message(
+                f"残高が不足しています。",
+                ephemeral=True
+            )
+            return
+
+        # GOLD減少
+        gold_data[uid] = user_gold - need_gold
+        save(DATA_GOLD, gold_data)
+
+        # COIN増加
+        coin_data[uid] = user_coin + want_coin
+        save_coin(coin_data)
+
+        embed = discord.Embed(
+            title="COIN貸出 完了",
+            description=(
+                f"【取得COIN】 {want_coin} COIN\n"
+                f"【消費GOLD】 {need_gold} G"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    # ================================
+    # 🔁 COIN返却（COIN → GOLD）
+    # ================================
+    if 操作.value == "return":
+
+        want_return = 数量
+
+        if user_coin < want_return:
+            await interaction.response.send_message("COIN残高が不足しています。", ephemeral=True)
+            return
+
+        # 10COIN単位で交換
+        returnable_unit = want_return // 10
+        if returnable_unit == 0:
+            await interaction.response.send_message("10COIN単位で返却できます。", ephemeral=True)
+            return
+
+        used_coin = returnable_unit * 10
+        gained_gold = returnable_unit * 180
+
+        # COIN減少
+        coin_data[uid] = user_coin - used_coin
+        save_coin(coin_data)
+
+        # GOLD増加
+        gold_data[uid] = user_gold + gained_gold
+        save(DATA_GOLD, gold_data)
+
+        embed = discord.Embed(
+            title="COIN返却 完了",
+            description=(
+                f"【返却COIN】 {used_coin} COIN\n"
+                f"【取得GOLD】 {gained_gold} G\n"
+                f"【端数COIN】 {want_return - used_coin} COIN（返却済み）"
+            ),
+            color=discord.Color.orange()
+        )
+
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+
+
 
 # ============================== リアクションロール：共通関数 ==============================
 def load_reaction_roles():
