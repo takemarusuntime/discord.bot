@@ -217,86 +217,104 @@ async def check_cl_role(member):
                 await member.remove_roles(r)
 
 
-# GOLD残高確認
+# ============================================================
+# GOLD メニュー（残高確認 / 送金）
+# ============================================================
+
 @bot.tree.command(
-    name="a1_GOLD残高確認",
-    description="あなたのGOLD残高を確認します"
+    name="a0_gold",
+    description="GOLDメニュー（残高確認・送金）"
 )
-async def gold_balance(interaction: discord.Interaction):
+@app_commands.describe(
+    操作="実行したい操作を選択します",
+    相手="送金相手（送金の場合のみ）",
+    金額="送金するGOLDの金額（1以上）"
+)
+@app_commands.choices(
+    操作=[
+        app_commands.Choice(name="GOLD残高確認", value="check"),
+        app_commands.Choice(name="GOLD送金", value="send"),
+    ]
+)
+async def a1_gold(
+    interaction: discord.Interaction,
+    操作: app_commands.Choice[str],
+    相手: discord.Member = None,
+    金額: int = None
+):
 
     uid = str(interaction.user.id)
     balance = gold_data.get(uid, 0)
 
-    embed = discord.Embed(
-        title="GOLD残高確認",
-        description=(
-            f"【名前】 {interaction.user.display_name}\n"
-            f"【現在のGOLD】 {balance} G"
-        ),
-        color=discord.Color.gold()
-    )
+    # ======================================================
+    # ① GOLD残高確認
+    # ======================================================
+    if 操作.value == "check":
+        embed = discord.Embed(
+            title="GOLD残高確認",
+            description=(
+                f"【名前】 {interaction.user.display_name}\n"
+                f"【現在のGOLD】 {balance} G"
+            ),
+            color=discord.Color.gold()
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# GOLD送金
-@bot.tree.command(
-    name="a2_GOLD送金",
-    description="GOLDを他のユーザーに送金します"
-)
-@app_commands.describe(
-    相手="送金相手のユーザー",
-    金額="送金するGOLDの金額（1以上）"
-)
-async def gold_send(interaction: discord.Interaction, 相手: discord.Member, 金額: int):
-
-    sender_id = str(interaction.user.id)
-    receiver_id = str(相手.id)
-
-    # ===== 自己送金防止 =====
-    if sender_id == receiver_id:
-        await interaction.response.send_message("自分自身には送金できません。", ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
-    # ===== 金額チェック =====
-    if 金額 <= 0:
-        await interaction.response.send_message("送金額は1以上で指定してください。", ephemeral=True)
+    # ======================================================
+    # ② GOLD送金
+    # ======================================================
+    if 操作.value == "send":
+
+        # 相手必須
+        if 相手 is None:
+            await interaction.response.send_message("送金する相手を指定してください。", ephemeral=True)
+            return
+
+        # 金額のチェック
+        if 金額 is None or 金額 <= 0:
+            await interaction.response.send_message("送金額は1以上で指定してください。", ephemeral=True)
+            return
+
+        sender_id = str(interaction.user.id)
+        receiver_id = str(相手.id)
+
+        # 自己送金防止
+        if sender_id == receiver_id:
+            await interaction.response.send_message("自分自身には送金できません。", ephemeral=True)
+            return
+
+        # 残高チェック
+        sender_gold = gold_data.get(sender_id, 0)
+        if sender_gold < 金額:
+            await interaction.response.send_message("ウォレット残高が不足しています。", ephemeral=True)
+            return
+
+        # 相手の初期作成
+        if receiver_id not in gold_data:
+            gold_data[receiver_id] = 0
+
+        # 実行
+        gold_data[sender_id] -= 金額
+        gold_data[receiver_id] += 金額
+        save(DATA_GOLD, gold_data)
+
+        embed = discord.Embed(
+            title="GOLD送金 完了",
+            description=(
+                f"【送金者】 {interaction.user.display_name}\n"
+                f"【受取者】 {相手.display_name}\n"
+                f"【送金額】 {金額} G\n\n"
+                f"送金が正常に完了しました。"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
-
-    # ===== GOLD残高確認 =====
-    sender_gold = gold_data.get(sender_id, 0)
-    if sender_gold < 金額:
-        await interaction.response.send_message("ウォレット残高が不足しています。", ephemeral=True)
-        return
-
-    # ===== 相手の初期データ保証 =====
-    if receiver_id not in gold_data:
-        gold_data[receiver_id] = 0
-
-    # ===== 送金実行 =====
-    gold_data[sender_id] -= 金額
-    gold_data[receiver_id] += 金額
-
-    # ===== 保存 =====
-    save(DATA_GOLD, gold_data)
-
-    # ===== 完了メッセージ =====
-    embed = discord.Embed(
-        title="GOLD送金 完了",
-        description=(
-            f"【送金者】 {interaction.user.display_name}\n"
-            f"【受取者】 {相手.display_name}\n"
-            f"【送金額】 {金額} G\n\n"
-            f"送金が正常に完了しました。"
-        ),
-        color=discord.Color.green()
-    )
-
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ============================== /b1_おみくじ ==============================
@@ -712,7 +730,7 @@ async def b2_remind(interaction: discord.Interaction, when: str):
 
 
 @bot.tree.command(
-    name="c1_casino_coin",
+    name="c0_casino_coin",
     description="COINメニュー（残高確認・貸出・返却）"
 )
 @app_commands.describe(
@@ -721,9 +739,9 @@ async def b2_remind(interaction: discord.Interaction, when: str):
 )
 @app_commands.choices(
     操作=[
-        app_commands.Choice(name="COIN残高確認", value="check"),
-        app_commands.Choice(name="COIN貸出（GOLD → COIN）", value="lend"),
-        app_commands.Choice(name="COIN返却（COIN → GOLD）", value="return")
+        app_commands.Choice(name="coin残高確認", value="check"),
+        app_commands.Choice(name="coin貸出（gold → coin）", value="lend"),
+        app_commands.Choice(name="coin返却（coin → gold）", value="return")
     ]
 )
 async def casino_coin(
@@ -744,7 +762,7 @@ async def casino_coin(
     if 操作.value == "check":
 
         embed = discord.Embed(
-            title="COIN残高確認",
+            title="coin残高確認",
             description=f"現在のCOIN： **{user_coin} COIN**",
             color=discord.Color.blue()
         )
