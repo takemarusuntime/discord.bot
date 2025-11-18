@@ -1,21 +1,16 @@
 # keep_alive.py
-from flask import Flask
-from threading import Thread
 import os
+from threading import Thread
+import flask
 
-app = Flask(__name__)
+app = flask.Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Alive"
-
-@app.route("/healthz")
-def healthz():
-    return "OK", 200
+    return "OK"   # ヘルスチェック用の簡単なレスポンス
 
 def run():
-    port = int(os.environ.get("PORT", 8080))
-    print(f"### Flask starting on port {port} ###")
+    port = int(os.environ.get("PORT", 10000))  # Render が PORT を渡してくる
     app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
