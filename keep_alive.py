@@ -1,19 +1,21 @@
 # keep_alive.py
-import os
+from flask import Flask
 from threading import Thread
-import flask
 
-app = flask.Flask(__name__)
+app = Flask('')
 
-@app.route("/")
+# Render が叩く可能性のある全てのパスで 200 を返す
+@app.route('/')
 def home():
-    return "OK"   # ヘルスチェック用の簡単なレスポンス
+    return "OK"
+
+@app.route('/healthz')
+def health():
+    return "OK"
 
 def run():
-    port = int(os.environ.get("PORT", 10000))  # Render が PORT を渡してくる
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=10000)
 
 def keep_alive():
     t = Thread(target=run)
-    t.daemon = True
     t.start()
