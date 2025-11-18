@@ -734,14 +734,14 @@ async def b2_remind(interaction: discord.Interaction, when: str):
     description="COINメニュー（残高確認・貸出・返却）"
 )
 @app_commands.describe(
-    操作="実行したい操作を選択します",
-    数量="貸出または返却する COIN の量（残高確認は不要）"
+    操作="COIN 貸出か返却か選んでください",
+    数量="貸出、返却したい COIN の数量"
 )
 @app_commands.choices(
     操作=[
         app_commands.Choice(name="COIN残高確認", value="check"),
-        app_commands.Choice(name="COIN貸出（gold → coin）", value="lend"),
-        app_commands.Choice(name="COIN返却（coin → gold）", value="return")
+        app_commands.Choice(name="COIN貸出（GOLD → COIN）", value="lend"),
+        app_commands.Choice(name="COIN返却（COIN → GOLD）", value="return")
     ]
 )
 async def casino_coin(
