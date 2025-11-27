@@ -114,7 +114,7 @@ async def check_and_assign_roles(member: discord.Member):
                 print(f"❌ {member.display_name} から {level['name']} を削除しました")
 
 # ===== ON/OFFコマンド =====
-@bot.tree.command(name="Z1_CL_ON", description="Communication Level機能をONにします（管理者のみ）")
+@bot.tree.command(name="z1_cl_on", description="Communication Level機能をONにします（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def a1_cl(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_roles:
@@ -124,7 +124,7 @@ async def a1_cl(interaction: discord.Interaction):
     save_data()
     await interaction.response.send_message("✅ Communication Level機能を **ON** にしました。", ephemeral=True)
 
-@bot.tree.command(name="Z2_CL_OFF", description="Communication Level機能をOFFにします（管理者のみ）")
+@bot.tree.command(name="z2_cl_off", description="Communication Level機能をOFFにします（管理者のみ）")
 @app_commands.default_permissions(administrator=True)
 async def a2_cl(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_roles:
@@ -137,7 +137,7 @@ async def a2_cl(interaction: discord.Interaction):
 
 
 # ===== ロール付与メッセージ機能 =====--------------------------------------------------------------------------
-@bot.tree.command(name="A1_ロール付与メッセージ", description="ボタンでロールを付与するメッセージを作成します（管理者のみ）")
+@bot.tree.command(name="a1_ロール付与メッセージ", description="ボタンでロールを付与するメッセージを作成します（管理者のみ）")
 @app_commands.describe(
     メッセージ内容="表示するメッセージの本文",
     ボタンとロール="例：『赤ボタン:Fire』『青ボタン:Water』『緑ボタン:Earth』のように入力（カンマ区切り）"
